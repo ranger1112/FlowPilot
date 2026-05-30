@@ -286,6 +286,155 @@ return {
   assert.equal(result.via, 'choose_account_oauth_consent_page');
 });
 
+test('step 7 phone signup clicks the available choose-account card instead of requiring email', async () => {
+  const api = new Function(`
+let pageState = 'choose_account_page';
+const clicked = [];
+const location = {
+  href: 'https://auth.openai.com/choose-an-account',
+  pathname: '/choose-an-account',
+};
+const accountCard = {
+  id: 'phone-account-card',
+  tagName: 'BUTTON',
+  textContent: 'Personal account',
+  value: '',
+  parentElement: null,
+  disabled: false,
+  getAttribute(name) {
+    if (name === 'aria-disabled') return 'false';
+    return '';
+  },
+  closest() {
+    return null;
+  },
+};
+const otherAccount = {
+  id: 'other-account',
+  tagName: 'A',
+  textContent: 'Log in with another account',
+  value: '',
+  parentElement: null,
+  disabled: false,
+  getAttribute(name) {
+    if (name === 'aria-disabled') return 'false';
+    return '';
+  },
+  closest() {
+    return null;
+  },
+};
+const createAccount = {
+  id: 'create-account',
+  tagName: 'A',
+  textContent: 'Create account',
+  value: '',
+  parentElement: null,
+  disabled: false,
+  getAttribute(name) {
+    if (name === 'aria-disabled') return 'false';
+    return '';
+  },
+  closest() {
+    return null;
+  },
+};
+
+const document = {
+  body: {
+    innerText: 'Welcome back Choose an account Personal account Log in with another account Create account',
+    textContent: 'Welcome back Choose an account Personal account Log in with another account Create account',
+  },
+  querySelectorAll(selector) {
+    if (String(selector).includes('body *')) return [accountCard, otherAccount, createAccount];
+    return [accountCard, otherAccount, createAccount];
+  },
+};
+
+function getOperationDelayRunner() {
+  return async (_metadata, operation) => operation();
+}
+function isVisibleElement(element) {
+  return Boolean(element);
+}
+function isActionEnabled(element) {
+  return Boolean(element) && !element.disabled && element.getAttribute('aria-disabled') !== 'true';
+}
+function simulateClick(element) {
+  clicked.push(element.id);
+  if (element === accountCard) {
+    pageState = 'oauth_consent_page';
+    location.href = 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent';
+    location.pathname = '/sign-in-with-chatgpt/codex/consent';
+  }
+}
+function inspectLoginAuthState() {
+  return { state: pageState, url: location.href, chooseAccountPage: pageState === 'choose_account_page' };
+}
+function throwIfStopped() {}
+async function sleep() {}
+async function humanPause() {}
+function log() {}
+async function finalizeStep6VerificationReady() { return { routed: 'verification' }; }
+async function step6LoginFromPasswordPage() { return { routed: 'password' }; }
+async function step6LoginFromEmailPage() { return { routed: 'email' }; }
+async function step6LoginFromPhonePage() { return { routed: 'phone' }; }
+async function createStep6LoginTimeoutRecoveryTransition() { return { action: 'recoverable', result: { routed: 'timeout' } }; }
+
+${extractConst('CHOOSE_ACCOUNT_PAGE_PATTERN')}
+${extractConst('CHOOSE_ACCOUNT_REMOVE_ACTION_PATTERN')}
+${extractConst('CHOOSE_ACCOUNT_OTHER_ACCOUNT_PATTERN')}
+${extractConst('CHOOSE_ACCOUNT_ACTION_SELECTOR')}
+${extractConst('CHOOSE_ACCOUNT_CARD_SELECTOR')}
+${extractFunction('getPageTextSnapshot')}
+${extractFunction('normalizeAuthAccountIdentifier')}
+${extractFunction('getChooseAccountCandidateText')}
+${extractFunction('isChooseAccountPage')}
+${extractFunction('isChooseAccountRemovalAction')}
+${extractFunction('resolveChooseAccountClickTarget')}
+${extractFunction('resolveChooseAccountCardTarget')}
+${extractFunction('findChooseAccountButtonForEmail')}
+${extractFunction('findChooseAccountOtherAccountButton')}
+${extractFunction('getChooseAccountListedEmails')}
+${extractFunction('resolveChooseAccountAction')}
+${extractFunction('createStep6SuccessResult')}
+${extractFunction('createStep6OAuthConsentSuccessResult')}
+${extractFunction('createStep6AddEmailSuccessResult')}
+${extractFunction('createStep6AddPhoneSuccessResult')}
+${extractFunction('createStep6RecoverableResult')}
+${extractFunction('normalizeStep6Snapshot')}
+${extractFunction('isOpenAiOAuthAuthorizationRoute')}
+${extractFunction('isPostChooseAccountOAuthRoute')}
+${extractFunction('waitForChooseAccountTransition')}
+${extractFunction('resolveChooseAccountTransitionResult')}
+${extractFunction('step6ChooseExistingAccount')}
+
+return {
+  clicked,
+  run() {
+    return step6ChooseExistingAccount(
+      {
+        loginIdentifierType: 'phone',
+        phoneNumber: '+447780579093',
+        accountIdentifier: '+447780579093',
+        visibleStep: 7,
+      },
+      { state: 'choose_account_page', url: location.href }
+    );
+  },
+};
+`)();
+
+  const result = await api.run();
+
+  assert.deepEqual(api.clicked, ['phone-account-card']);
+  assert.equal(result.step6Outcome, 'success');
+  assert.equal(result.state, 'oauth_consent_page');
+  assert.equal(result.skipLoginVerificationStep, true);
+  assert.equal(result.directOAuthConsentPage, true);
+  assert.equal(result.via, 'choose_account_oauth_consent_page');
+});
+
 test('step 7 hands off to post-login phone verification when choose-account lands on add-phone', async () => {
   const api = new Function(`
 let pageState = 'choose_account_page';

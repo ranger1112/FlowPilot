@@ -1001,6 +1001,130 @@ return {
   assert.deepEqual(api.getClicks(), ['免费注册', 'Continue with phone number']);
 });
 
+test('ensureSignupPhoneEntryReady treats localized username autocomplete field as phone entry when placeholder is phone number', async () => {
+  const api = new Function(`
+let now = 0;
+
+const phoneInput = {
+  kind: 'phone',
+  getAttribute(name) {
+    if (name === 'type') return 'text';
+    if (name === 'autocomplete') return 'username';
+    if (name === 'placeholder') return '+81 手机号码';
+    return '';
+  },
+  getBoundingClientRect() {
+    return { width: 340, height: 56 };
+  },
+};
+
+const document = {
+  querySelector(selector) {
+    if (selector === SIGNUP_EMAIL_INPUT_SELECTOR) return phoneInput;
+    if (selector === SIGNUP_PHONE_INPUT_SELECTOR) return phoneInput;
+    return null;
+  },
+  querySelectorAll(selector) {
+    if (selector === 'input') return [phoneInput];
+    return [];
+  },
+};
+
+const location = {
+  href: 'https://chatgpt.com/',
+};
+
+const Date = {
+  now() {
+    return now;
+  },
+};
+
+${extractConst('SIGNUP_ENTRY_TRIGGER_PATTERN')}
+${extractConst('SIGNUP_EMAIL_INPUT_SELECTOR')}
+${extractConst('SIGNUP_PHONE_INPUT_SELECTOR')}
+${extractConst('SIGNUP_SWITCH_TO_EMAIL_PATTERN')}
+${extractConst('SIGNUP_SWITCH_ACTION_PATTERN')}
+${extractConst('SIGNUP_EMAIL_ACTION_PATTERN')}
+${extractConst('SIGNUP_WORK_EMAIL_PATTERN')}
+${extractConst('SIGNUP_PHONE_ACTION_PATTERN')}
+${extractConst('SIGNUP_SWITCH_TO_PHONE_PATTERN')}
+${extractConst('SIGNUP_MORE_OPTIONS_PATTERN')}
+
+function isVisibleElement(el) {
+  return Boolean(el);
+}
+
+function isActionEnabled(el) {
+  return Boolean(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+}
+
+function getActionText(el) {
+  return [el?.textContent, el?.value, el?.getAttribute?.('aria-label'), el?.getAttribute?.('title')]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\\s+/g, ' ')
+    .trim();
+}
+
+function getSignupPasswordInput() {
+  return null;
+}
+
+function isSignupPasswordPage() {
+  return false;
+}
+
+function getSignupPasswordSubmitButton() {
+  return null;
+}
+
+function getSignupPasswordDisplayedEmail() {
+  return '';
+}
+
+function getPageTextSnapshot() {
+  return '登录或注册 使用电子邮件继续 日本 +81 手机号码 继续';
+}
+
+function throwIfStopped() {}
+function log() {}
+async function humanPause() {}
+function simulateClick() {}
+async function sleep(ms) { now += ms; }
+
+${extractFunction('getSignupEmailInput')}
+${extractFunction('getSignupPhoneInput')}
+${extractFunction('findSignupUseEmailTrigger')}
+${extractFunction('findSignupUsePhoneTrigger')}
+${extractFunction('findSignupMoreOptionsTrigger')}
+${extractFunction('getSignupEmailContinueButton')}
+${extractFunction('findSignupEntryTrigger')}
+${extractFunction('inspectSignupEntryState')}
+${extractFunction('waitForSignupPhoneEntryState')}
+function getSignupEntryDiagnostics() { return {}; }
+${extractFunction('ensureSignupPhoneEntryReady')}
+
+return {
+  async run() {
+    return ensureSignupPhoneEntryReady();
+  },
+  inspect() {
+    return inspectSignupEntryState().state;
+  },
+};
+`)();
+
+  assert.equal(api.inspect(), 'phone_entry');
+  const result = await api.run();
+
+  assert.deepEqual(result, {
+    ready: true,
+    state: 'phone_entry',
+    url: 'https://chatgpt.com/',
+  });
+});
+
 test('waitForSignupPhoneEntryState retries the signup entry click five times before giving up', async () => {
   const api = new Function(`
 const logs = [];

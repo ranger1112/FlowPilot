@@ -614,8 +614,23 @@ const SIGNUP_MORE_OPTIONS_PATTERN = /更多选项|其它方式|其他方式|そ�
 const SIGNUP_WORK_EMAIL_PATTERN = /\u5de5\u4f5c|business|work\s+email/i;
 
 function getSignupEmailInput() {
+  const looksLikePhoneInput = (el) => {
+    if (!el) return false;
+    const type = String(el.getAttribute?.('type') || '').trim().toLowerCase();
+    const name = String(el.getAttribute?.('name') || '').trim().toLowerCase();
+    const id = String(el.getAttribute?.('id') || '').trim().toLowerCase();
+    const placeholder = String(el.getAttribute?.('placeholder') || '').trim();
+    const ariaLabel = String(el.getAttribute?.('aria-label') || '').trim();
+    const autocomplete = String(el.getAttribute?.('autocomplete') || '').trim().toLowerCase();
+    const combinedText = `${placeholder} ${ariaLabel}`;
+    return type === 'tel'
+      || autocomplete === 'tel'
+      || /phone|tel/i.test(`${name} ${id}`)
+      || /手机|电话|手机号|電話|電話番号|携帯|携帯電話/.test(combinedText);
+  };
+
   const input = document.querySelector(SIGNUP_EMAIL_INPUT_SELECTOR);
-  if (input && isVisibleElement(input)) {
+  if (input && isVisibleElement(input) && !looksLikePhoneInput(input)) {
     return input;
   }
 
@@ -628,6 +643,7 @@ function getSignupEmailInput() {
     const ariaLabel = String(el.getAttribute?.('aria-label') || '').trim();
     const autocomplete = String(el.getAttribute?.('autocomplete') || '').trim().toLowerCase();
     const combinedText = `${placeholder} ${ariaLabel}`;
+    if (looksLikePhoneInput(el)) return false;
     return type === 'email'
       || autocomplete === 'email'
       || autocomplete === 'username'
@@ -3275,7 +3291,9 @@ function getChooseAccountListedEmails() {
   return Array.from(emails).filter(Boolean);
 }
 
-async function resolveChooseAccountAction(email, maxRounds = 8) {
+async function resolveChooseAccountAction(email, maxRounds = 8, options = {}) {
+  const allowFirstAccountFallback = Boolean(options?.allowFirstAccountFallback);
+  const createAccountPattern = /create\s+(?:an?\s+)?account|sign\s*up|register|\u521b\u5efa(?:\u5e10\u6237|\u8d26\u6237|\u8d26\u53f7)|\u6ce8\u518c|\u30a2\u30ab\u30a6\u30f3\u30c8.*\u4f5c\u6210|\u767b\u9332/i;
   let otherAccountButton = null;
   let latestSnapshot = normalizeStep6Snapshot(inspectLoginAuthState());
 
@@ -3294,6 +3312,39 @@ async function resolveChooseAccountAction(email, maxRounds = 8) {
         target,
         snapshot: latestSnapshot,
       };
+    }
+
+    if (allowFirstAccountFallback) {
+      const fallbackCandidates = Array.from(new Set([
+        ...Array.from(document.querySelectorAll(CHOOSE_ACCOUNT_ACTION_SELECTOR)),
+        ...Array.from(document.querySelectorAll(CHOOSE_ACCOUNT_CARD_SELECTOR)),
+      ]));
+      for (const candidate of fallbackCandidates) {
+        if (!candidate || !isVisibleElement(candidate) || isChooseAccountRemovalAction(candidate)) {
+          continue;
+        }
+        const candidateText = normalizeAuthAccountIdentifier(getChooseAccountCandidateText(candidate));
+        if (
+          !candidateText
+          || CHOOSE_ACCOUNT_OTHER_ACCOUNT_PATTERN.test(candidateText)
+          || createAccountPattern.test(candidateText)
+        ) {
+          continue;
+        }
+        const clickTarget = resolveChooseAccountClickTarget(candidate) || candidate;
+        if (
+          clickTarget
+          && isVisibleElement(clickTarget)
+          && isActionEnabled(clickTarget)
+          && !isChooseAccountRemovalAction(clickTarget)
+        ) {
+          return {
+            target: clickTarget,
+            snapshot: latestSnapshot,
+            fallback: true,
+          };
+        }
+      }
     }
 
     otherAccountButton = findChooseAccountOtherAccountButton() || otherAccountButton;
@@ -6091,20 +6142,19 @@ async function step6ChooseExistingAccount(payload, snapshot) {
   const visibleStep = Math.floor(Number(payload?.visibleStep) || 0) || 7;
   const currentSnapshot = normalizeStep6Snapshot(snapshot || inspectLoginAuthState());
   const loginIdentifierType = String(payload?.loginIdentifierType || '').trim();
-  if (loginIdentifierType === 'phone') {
-    return createStep6RecoverableResult('choose_account_requires_email_identifier', currentSnapshot, {
-      message: 'OpenAI choose-account page requires an email account card; current login identifier is phone.',
-    });
-  }
-
+  const isPhoneLoginIdentifier = loginIdentifierType === 'phone';
   const email = normalizeAuthAccountIdentifier(payload?.email || payload?.accountIdentifier || '');
-  if (!email || !email.includes('@')) {
+  const phoneIdentifier = normalizeAuthAccountIdentifier(payload?.phoneNumber || payload?.accountIdentifier || '');
+  const accountLabel = email && email.includes('@') ? email : (phoneIdentifier || '当前手机号账号');
+  if ((!email || !email.includes('@')) && !isPhoneLoginIdentifier) {
     return createStep6RecoverableResult('missing_choose_account_email', currentSnapshot, {
       message: 'OpenAI choose-account page is visible, but the target email is missing.',
     });
   }
 
-  const chooseAccountAction = await resolveChooseAccountAction(email);
+  const chooseAccountAction = await resolveChooseAccountAction(email, 8, {
+    allowFirstAccountFallback: isPhoneLoginIdentifier,
+  });
   if (
     chooseAccountAction.snapshot
     && chooseAccountAction.snapshot.state !== 'unknown'
@@ -6124,7 +6174,7 @@ async function step6ChooseExistingAccount(payload, snapshot) {
     if (otherAccountButton) {
       const listedEmails = getChooseAccountListedEmails();
       const listedLabel = listedEmails.length ? `页面已有账号：${listedEmails.join(', ')}。` : '页面未读取到已有账号邮箱。';
-      log(`OpenAI 选择账号页未列出目标邮箱 ${email}，${listedLabel} 将点击“登录至另一个帐户”继续目标邮箱登录。`, 'warn', { step: visibleStep, stepKey: 'oauth-login' });
+      log(`OpenAI 选择账号页未确认目标账号 ${accountLabel}，${listedLabel} 将点击“登录至另一个帐户”继续登录。`, 'warn', { step: visibleStep, stepKey: 'oauth-login' });
       await humanPause(350, 900);
       await performOperationWithDelay({ stepKey: 'oauth-login', kind: 'click', label: 'choose-other-account' }, async () => {
         simulateClick(otherAccountButton);
@@ -6147,15 +6197,15 @@ async function step6ChooseExistingAccount(payload, snapshot) {
       );
       if (otherAccountRoutedResult) return otherAccountRoutedResult;
       return createStep6RecoverableResult('choose_account_other_account_transition_stalled', otherAccountSnapshot, {
-        message: `Clicked another-account login because ${email} was not listed, but the page did not enter a supported login state.`,
+        message: `Clicked another-account login because ${accountLabel} was not confirmed, but the page did not enter a supported login state.`,
       });
     }
     return createStep6RecoverableResult('choose_account_target_not_found', currentSnapshot, {
-      message: `OpenAI choose-account page does not contain target email ${email}.`,
+      message: `OpenAI choose-account page does not contain target account ${accountLabel}.`,
     });
   }
 
-  log(`Detected OpenAI choose-account page, selecting ${email}...`, 'info', { step: visibleStep, stepKey: 'oauth-login' });
+  log(`Detected OpenAI choose-account page, selecting ${accountLabel}...`, 'info', { step: visibleStep, stepKey: 'oauth-login' });
   await humanPause(350, 900);
   await performOperationWithDelay({ stepKey: 'oauth-login', kind: 'click', label: 'choose-existing-account' }, async () => {
     simulateClick(target);
@@ -6166,7 +6216,7 @@ async function step6ChooseExistingAccount(payload, snapshot) {
   if (routedResult) return routedResult;
 
   return createStep6RecoverableResult('choose_account_transition_stalled', nextSnapshot, {
-    message: `Clicked ${email} on OpenAI choose-account page, but the page did not enter a supported next state.`,
+    message: `Clicked ${accountLabel} on OpenAI choose-account page, but the page did not enter a supported next state.`,
   });
 }
 
