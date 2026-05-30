@@ -1195,7 +1195,7 @@
       if (message.startsWith(PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX)) {
         return true;
       }
-      return /无法向此电话号码发送短信|无法向此手机号发送短信|无法发送短信到此电话号码|无法发送短信到此手机号|can(?:not|'t)\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number|unable\s+to\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number/i.test(message);
+      return /无法向此(?:电话|手机)号码发送(?:短信|文本消息)|无法发送(?:短信|文本消息)到此(?:电话|手机)号码|can(?:not|'t)\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number|unable\s+to\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number/i.test(message);
     }
 
     function isPhoneResendServerError(error) {
@@ -2093,6 +2093,7 @@
       const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
         ? await getOAuthFlowStepTimeoutMs(65000, { step: visibleStep, actionLabel: '重新发送注册手机验证码' })
         : 65000;
+      await throwPhoneResendServerErrorIfAuthTabShowsIt(tabId);
       const result = await sendToContentScriptResilient('openai-auth', {
         type: 'RESEND_VERIFICATION_CODE',
         step: visibleStep,
@@ -3334,6 +3335,29 @@
           }
         };
 
+        const throwSignupPhonePageErrorIfPresent = async () => {
+          const pageError = await checkPhoneResendPageError(tabId, state);
+          if (pageError?.reason === 'resend_phone_banned') {
+            throw new Error(`${PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX}${pageError.message || 'OpenAI 无法向此手机号发送短信。'}`);
+          }
+          if (pageError?.reason === 'phone_max_usage_exceeded') {
+            throw buildPhoneMaxUsageExceededError(pageError.message);
+          }
+          if (pageError?.reason === 'resend_server_error') {
+            throw buildPhoneResendServerError(pageError.message);
+          }
+          if (pageError?.reason === 'resend_throttled') {
+            if (shouldTreatResendThrottledAsBanned(state)) {
+              throw buildHighRiskResendThrottledError(pageError.message);
+            }
+            await addLog(
+              `步骤 4：检测到号码 ${activation.phoneNumber} 重发限流，但未启用“按疑似封禁处理”，继续等待短信。${pageError.message || ''}`.trim(),
+              'warn',
+              { step: 4, stepKey: 'fetch-signup-code' }
+            );
+          }
+        };
+
         let shouldCancelActivation = true;
         try {
           for (let attempt = 1; attempt <= DEFAULT_PHONE_SUBMIT_ATTEMPTS; attempt += 1) {
@@ -3343,6 +3367,7 @@
             const code = await waitForSignupPhoneCode(state, activation, {
               onPollStatus: async () => {
                 await assertSignupPhoneStillApplicable('while waiting for SMS code');
+                await throwSignupPhonePageErrorIfPresent();
               },
               onTimeoutWindow: async () => {
                 try {
@@ -3357,6 +3382,9 @@
                   }
                   if (isPhoneResendServerError(resendError)) {
                     throw buildPhoneResendServerError(resendError);
+                  }
+                  if (isPhoneResendBannedNumberError(resendError) || isPhoneMaxUsageExceededFlowError(resendError)) {
+                    throw resendError;
                   }
                   await throwPhoneResendServerErrorIfAuthTabShowsIt(tabId);
                   await addLog(`步骤 4：注册手机验证码页面重发失败，将继续轮询短信。${resendError.message}`, 'warn', {
@@ -3398,6 +3426,9 @@
                 }
                 if (isPhoneResendServerError(resendError)) {
                   throw buildPhoneResendServerError(resendError);
+                }
+                if (isPhoneResendBannedNumberError(resendError) || isPhoneMaxUsageExceededFlowError(resendError)) {
+                  throw resendError;
                 }
                 await throwPhoneResendServerErrorIfAuthTabShowsIt(tabId);
                 await addLog(`步骤 4：验证码被拒后点击重发失败。${resendError.message}`, 'warn', {

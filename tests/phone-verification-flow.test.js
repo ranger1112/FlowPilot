@@ -1051,6 +1051,89 @@ test('signup phone helper fails stale email-verification before polling SMS', as
   assert.deepStrictEqual(contentMessages.map((message) => message.type), ['STEP8_GET_STATE']);
 });
 
+test('signup phone helper stops SMS polling when auth page says text message cannot be sent', async () => {
+  let smsPollCount = 0;
+  const contentMessages = [];
+  let currentState = {
+    heroSmsApiKey: 'demo-key',
+    heroSmsReuseEnabled: false,
+    phoneCodeWaitSeconds: 15,
+    phoneCodeTimeoutWindows: 1,
+    phoneCodePollIntervalSeconds: 1,
+    phoneCodePollMaxRounds: 3,
+    signupPhoneNumber: '56989555435',
+    signupPhoneVerificationPurpose: 'signup',
+    signupPhoneActivation: {
+      activationId: 'signup-banned',
+      phoneNumber: '56989555435',
+      provider: 'hero-sms',
+      serviceCode: 'dr',
+      countryId: 52,
+      successfulUses: 0,
+      maxUses: 3,
+    },
+  };
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'getStatus') {
+        smsPollCount += 1;
+        return {
+          ok: true,
+          text: async () => 'STATUS_WAIT_CODE',
+        };
+      }
+      if (action === 'setStatus') {
+        return {
+          ok: true,
+          text: async () => 'ACCESS_CANCEL',
+        };
+      }
+      throw new Error(`Unexpected HeroSMS action: ${action}`);
+    },
+    getOAuthFlowStepTimeoutMs: async (fallback) => fallback,
+    getState: async () => currentState,
+    sendToContentScriptResilient: async (_source, message) => {
+      contentMessages.push(message);
+      if (message.type === 'STEP8_GET_STATE') {
+        return {
+          emailVerificationPage: false,
+          phoneVerificationPage: true,
+          url: 'https://auth.openai.com/phone-verification',
+        };
+      }
+      if (message.type === 'CHECK_PHONE_RESEND_ERROR') {
+        return {
+          hasError: true,
+          reason: 'resend_phone_banned',
+          message: '无法向此电话号码发送文本消息',
+          url: 'https://auth.openai.com/phone-verification',
+        };
+      }
+      throw new Error(`Unexpected content-script message: ${message.type}`);
+    },
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => helpers.completeSignupPhoneVerificationFlow(77, { state: currentState }),
+    /PHONE_RESEND_BANNED_NUMBER::无法向此电话号码发送文本消息/
+  );
+
+  assert.equal(smsPollCount, 1, 'should stop after the first WAIT_CODE poll once the page reports a banned number');
+  assert.deepStrictEqual(
+    contentMessages.map((message) => message.type),
+    ['STEP8_GET_STATE', 'STEP8_GET_STATE', 'CHECK_PHONE_RESEND_ERROR']
+  );
+});
+
 test('signup phone helper fails stale email-verification that appears during SMS polling', async () => {
   let smsPollCount = 0;
   let pageStateReads = 0;
@@ -1233,7 +1316,10 @@ test('signup phone helper does not let a hung page-state probe stall HeroSMS pol
 
   assert.equal(smsPollCount, 1, 'HeroSMS polling should time out cleanly even when the page-state probe hangs');
   assert.equal(pageReadyCalls, 2, 'should attempt the page-state probe during SMS polling');
-  assert.deepStrictEqual(contentMessages.map((message) => message.type), ['STEP8_GET_STATE']);
+  assert.deepStrictEqual(contentMessages.map((message) => message.type), [
+    'STEP8_GET_STATE',
+    'CHECK_PHONE_RESEND_ERROR',
+  ]);
   assert.deepStrictEqual(statusActions, ['8']);
   assert.ok(caughtError, 'expected SMS timeout rather than a stalled page-state probe');
   assert.doesNotMatch(caughtError.message, /hung waiting for signup phone page-state probe/);
@@ -7500,6 +7586,82 @@ test('signup phone verification cancels activation when resend lands on contact-
   assert.equal(requests.filter((request) => request.searchParams.get('action') === 'getStatus').length, 1);
 });
 
+test('signup phone verification preflights contact-verification 500 before waiting for resend button', async () => {
+  const requests = [];
+  const messages = [];
+  let currentState = {
+    heroSmsApiKey: 'demo-key',
+    heroSmsCountryId: 52,
+    heroSmsCountryLabel: 'Thailand',
+    verificationResendCount: 0,
+    phoneCodeWaitSeconds: 15,
+    phoneCodeTimeoutWindows: 2,
+    phoneCodePollIntervalSeconds: 15,
+    phoneCodePollMaxRounds: 1,
+    signupPhoneActivation: {
+      activationId: '930002',
+      phoneNumber: '66953330003',
+      provider: 'hero-sms',
+      countryId: 52,
+      countryLabel: 'Thailand',
+    },
+  };
+
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      const action = parsedUrl.searchParams.get('action');
+      const id = parsedUrl.searchParams.get('id');
+      if (action === 'getStatus') {
+        return { ok: true, text: async () => 'STATUS_WAIT_CODE' };
+      }
+      if (action === 'setStatus') {
+        return { ok: true, text: async () => `STATUS_UPDATED:${id}` };
+      }
+      throw new Error(`Unexpected HeroSMS action: ${action}`);
+    },
+    getState: async () => ({ ...currentState }),
+    readAuthTabSnapshot: async () => ({
+      url: 'https://auth.openai.com/contact-verification',
+      title: 'auth.openai.com',
+      text: "This page isn't working auth.openai.com is currently unable to handle this request. HTTP ERROR 500",
+    }),
+    sendToContentScriptResilient: async (_source, message) => {
+      messages.push(message.type);
+      if (message.type === 'STEP8_GET_STATE') {
+        return {
+          phoneVerificationPage: true,
+          url: 'https://auth.openai.com/phone-verification',
+        };
+      }
+      if (message.type === 'RESEND_VERIFICATION_CODE') {
+        throw new Error('should not wait for resend button once auth tab already shows contact-verification 500');
+      }
+      throw new Error(`Unexpected content-script message: ${message.type}`);
+    },
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => helpers.completeSignupPhoneVerificationFlow(1, { state: currentState }),
+    (error) => {
+      assert.match(error.message, /^PHONE_RESEND_SERVER_ERROR::/);
+      assert.match(error.message, /HTTP ERROR 500/);
+      return true;
+    }
+  );
+
+  assert.equal(messages.includes('RESEND_VERIFICATION_CODE'), false);
+  assert.equal(currentState.signupPhoneActivation, null);
+  assert.equal(requests.filter((request) => request.searchParams.get('action') === 'getStatus').length <= 1, true);
+});
+
 test('signup phone verification does not treat contact-verification URL-only snapshot as resend server error', async () => {
   let resendAttempted = false;
   let currentState = {
@@ -7618,11 +7780,17 @@ test('signup phone verification fails when contact-verification 500 appears afte
       throw new Error(`Unexpected HeroSMS action: ${action}`);
     },
     getState: async () => ({ ...currentState }),
-    readAuthTabSnapshot: async () => ({
-      url: 'https://auth.openai.com/contact-verification',
-      title: "This page isn't working",
-      text: 'auth.openai.com is currently unable to handle this request. HTTP ERROR 500',
-    }),
+    readAuthTabSnapshot: async () => (resendCalls > 0
+      ? {
+          url: 'https://auth.openai.com/contact-verification',
+          title: "This page isn't working",
+          text: 'auth.openai.com is currently unable to handle this request. HTTP ERROR 500',
+        }
+      : {
+          url: 'https://auth.openai.com/phone-verification',
+          title: 'Verify your phone',
+          text: 'Enter the code sent to your phone.',
+        }),
     sendToContentScriptResilient: async (_source, message) => {
       messages.push(message.type);
       if (message.type === 'STEP8_GET_STATE') {
@@ -7666,6 +7834,7 @@ test('signup phone verification fails when contact-verification 500 appears afte
   assert.deepStrictEqual(messages, [
     'STEP8_GET_STATE',
     'STEP8_GET_STATE',
+    'CHECK_PHONE_RESEND_ERROR',
     'RESEND_VERIFICATION_CODE',
     'STEP8_GET_STATE',
   ]);

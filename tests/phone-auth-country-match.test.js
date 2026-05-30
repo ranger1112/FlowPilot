@@ -633,3 +633,45 @@ test('phone auth exposes resend page error checks for banned numbers', () => {
     global.document = originalDocument;
   }
 });
+
+test('phone auth treats Chinese text-message resend rejection as banned number', () => {
+  const originalLocation = global.location;
+  const originalDocument = global.document;
+  try {
+    global.location = {
+      href: 'https://auth.openai.com/phone-verification',
+      pathname: '/phone-verification',
+    };
+    global.document = {
+      querySelector() {
+        return null;
+      },
+    };
+
+    const helpers = api.createPhoneAuthHelpers({
+      fillInput: () => {},
+      getActionText: () => '',
+      getPageTextSnapshot: () => '无法向此电话号码发送文本消息',
+      getVerificationErrorText: () => '',
+      humanPause: async () => {},
+      isActionEnabled: () => true,
+      isAddPhonePageReady: () => false,
+      isConsentReady: () => false,
+      isPhoneVerificationPageReady: () => true,
+      isVisibleElement: () => true,
+      simulateClick: () => {},
+      sleep: async () => {},
+      throwIfStopped: () => {},
+      waitForElement: async () => null,
+    });
+
+    const result = helpers.checkPhoneResendError();
+    assert.equal(result.hasError, true);
+    assert.equal(result.reason, 'resend_phone_banned');
+    assert.equal(result.prefix, 'PHONE_RESEND_BANNED_NUMBER::');
+    assert.match(result.message, /文本消息/);
+  } finally {
+    global.location = originalLocation;
+    global.document = originalDocument;
+  }
+});
