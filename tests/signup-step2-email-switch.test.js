@@ -1001,6 +1001,139 @@ return {
   assert.deepEqual(api.getClicks(), ['免费注册', 'Continue with phone number']);
 });
 
+test('ensureSignupPhoneEntryReady accepts unified auth page phone action without signup button', async () => {
+  const api = new Function(`
+const clicks = [];
+let phase = 'unified';
+let now = 0;
+
+const switchButton = {
+  textContent: '\\u4f7f\\u7528\\u7535\\u8bdd\\u53f7\\u7801\\u7ee7\\u7eed',
+  value: '',
+  disabled: false,
+  getAttribute(name) {
+    if (name === 'type') return 'button';
+    return '';
+  },
+  getBoundingClientRect() {
+    return { width: 220, height: 48 };
+  },
+};
+
+const phoneInput = {
+  kind: 'phone',
+  getAttribute(name) {
+    if (name === 'type') return 'tel';
+    return '';
+  },
+};
+
+const document = {
+  querySelector(selector) {
+    if (selector === SIGNUP_EMAIL_INPUT_SELECTOR) return null;
+    if (selector === SIGNUP_PHONE_INPUT_SELECTOR) return phase === 'phone' ? phoneInput : null;
+    if (selector === 'button[type="submit"], input[type="submit"]') return null;
+    return null;
+  },
+  querySelectorAll(selector) {
+    if (selector === 'button, a, [role="button"], [role="link"]') {
+      return phase === 'unified' ? [switchButton] : [];
+    }
+    if (selector === 'a, button, [role="button"], [role="link"]') return [];
+    if (selector === 'button, a, [role="button"], [role="link"], input[type="button"], input[type="submit"]') {
+      return phase === 'unified' ? [switchButton] : [];
+    }
+    if (selector === 'input') return phase === 'phone' ? [phoneInput] : [];
+    return [];
+  },
+};
+
+const location = {
+  href: 'https://chatgpt.com/auth/login',
+};
+
+const Date = {
+  now() {
+    return now;
+  },
+};
+
+${extractConst('SIGNUP_ENTRY_TRIGGER_PATTERN')}
+${extractConst('SIGNUP_EMAIL_INPUT_SELECTOR')}
+${extractConst('SIGNUP_PHONE_INPUT_SELECTOR')}
+${extractConst('SIGNUP_SWITCH_TO_EMAIL_PATTERN')}
+${extractConst('SIGNUP_SWITCH_ACTION_PATTERN')}
+${extractConst('SIGNUP_EMAIL_ACTION_PATTERN')}
+${extractConst('SIGNUP_WORK_EMAIL_PATTERN')}
+${extractConst('SIGNUP_PHONE_ACTION_PATTERN')}
+${extractConst('SIGNUP_SWITCH_TO_PHONE_PATTERN')}
+${extractConst('SIGNUP_MORE_OPTIONS_PATTERN')}
+
+function isVisibleElement(el) {
+  return Boolean(el);
+}
+
+function isActionEnabled(el) {
+  return Boolean(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+}
+
+function getActionText(el) {
+  return [el?.textContent, el?.value, el?.getAttribute?.('aria-label'), el?.getAttribute?.('title')]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\\s+/g, ' ')
+    .trim();
+}
+
+function getSignupPasswordInput() { return null; }
+function isSignupPasswordPage() { return false; }
+function getSignupPasswordSubmitButton() { return null; }
+function getSignupPasswordDisplayedEmail() { return ''; }
+function getPageTextSnapshot() { return '\\u767b\\u5f55\\u6216\\u6ce8\\u518c'; }
+function throwIfStopped() {}
+function log() {}
+async function humanPause() {}
+
+function simulateClick(target) {
+  clicks.push(getActionText(target));
+  if (target === switchButton) {
+    phase = 'phone';
+  }
+}
+
+async function sleep(ms) {
+  now += ms;
+}
+
+${extractFunction('getSignupEmailInput')}
+${extractFunction('getSignupPhoneInput')}
+${extractFunction('findSignupUseEmailTrigger')}
+${extractFunction('findSignupUsePhoneTrigger')}
+${extractFunction('findSignupMoreOptionsTrigger')}
+${extractFunction('getSignupEmailContinueButton')}
+${extractFunction('findSignupEntryTrigger')}
+${extractFunction('inspectSignupEntryState')}
+${extractFunction('waitForSignupPhoneEntryState')}
+function getSignupEntryDiagnostics() { return {}; }
+${extractFunction('ensureSignupPhoneEntryReady')}
+
+return {
+  async run() {
+    return ensureSignupPhoneEntryReady();
+  },
+  getClicks() {
+    return clicks.slice();
+  },
+};
+`)();
+
+  const result = await api.run();
+
+  assert.equal(result.ready, true);
+  assert.equal(result.state, 'phone_entry');
+  assert.deepEqual(api.getClicks(), ['使用电话号码继续']);
+});
+
 test('ensureSignupPhoneEntryReady treats localized username autocomplete field as phone entry when placeholder is phone number', async () => {
   const api = new Function(`
 let now = 0;

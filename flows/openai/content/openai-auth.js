@@ -839,6 +839,22 @@ function inspectSignupEntryState() {
     };
   }
 
+  const authEntryUrl = /\/(?:auth\/login|auth\/signup|create-account|log-in)(?:[/?#]|$)/i.test(String(location.href || ''));
+  const pageText = typeof getPageTextSnapshot === 'function' ? getPageTextSnapshot() : '';
+  const unifiedAuthEntryText = /登录或注册|登入或註冊|ログインまたは登録|log\s*in\s*or\s*sign\s*up|sign\s*in\s*or\s*sign\s*up/i.test(pageText);
+  if (authEntryUrl || unifiedAuthEntryText) {
+    const switchToPhoneTrigger = findSignupUsePhoneTrigger();
+    if (switchToPhoneTrigger) {
+      return {
+        state: 'email_entry',
+        emailInput: null,
+        continueButton: getSignupEmailContinueButton({ allowDisabled: true }),
+        switchToPhoneTrigger,
+        url: location.href,
+      };
+    }
+  }
+
   const signupTrigger = findSignupEntryTrigger();
   if (signupTrigger) {
     return {
@@ -1031,6 +1047,7 @@ function getSignupEntryDiagnostics() {
     hasPhoneInput: Boolean(getSignupPhoneInput()),
     hasPasswordInput: Boolean(getSignupPasswordInput()),
     hasSwitchToEmailAction: Boolean(findSignupUseEmailTrigger()),
+    hasSwitchToPhoneAction: Boolean(findSignupUsePhoneTrigger()),
     bodyContainsSignupText: SIGNUP_ENTRY_TRIGGER_PATTERN.test(getPageTextSnapshot()),
     signupLikeActionCounts: {
       total: signupLikeActions.length,

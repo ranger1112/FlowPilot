@@ -244,39 +244,81 @@
         throw new Error(`认证页面标签页已关闭，无法完成步骤 ${step} 的提交后确认。`);
       }
 
-      await ensureContentScriptReadyOnTab('openai-auth', tabId, {
-        inject: OPENAI_AUTH_INJECT_FILES,
-        injectSource: 'openai-auth',
-        timeoutMs: 45000,
-        retryDelayMs: 900,
-        logMessage: `步骤 ${step}：认证页仍在切换，正在等待页面恢复后继续确认提交流程...`,
-      });
-
-      let result;
-      try {
-        result = await sendToContentScriptResilient('openai-auth', {
-          type: 'PREPARE_SIGNUP_VERIFICATION',
-          step,
-          source: 'background',
-          payload: {
-            password: password || '',
-            prepareSource: 'step3_finalize',
-            prepareLogLabel: '步骤 3 收尾',
-          },
-        }, {
-          timeoutMs: 30000,
-          retryDelayMs: 700,
-          logMessage: `步骤 ${step}：密码已提交，正在确认是否进入下一页面，必要时自动恢复重试页...`,
-        });
-      } catch (error) {
+      const isStep3FinalizeRecoverableTransportError = (error) => {
         if (isRetryableContentScriptTransportError(error)) {
-          const message = `步骤 ${step}：认证页在提交后切换过程中页面通信超时，未能重新就绪，暂时无法确认是否进入下一页面。请重试当前轮。`;
+          return true;
+        }
+        const message = String(error?.message || error || '');
+        return /页面刚完成跳转或刷新|内容脚本还没有重新接回|扩展已自动重试，但仍未恢复|等待\s*认证页\s*重新就绪超时/i.test(message);
+      };
+      const prepareRequest = {
+        type: 'PREPARE_SIGNUP_VERIFICATION',
+        step,
+        source: 'background',
+        payload: {
+          password: password || '',
+          prepareSource: 'step3_finalize',
+          prepareLogLabel: '步骤 3 收尾',
+        },
+      };
+      const maxPrepareAttempts = 3;
+      let result;
+      let lastRecoverableError = null;
+
+      for (let attempt = 1; attempt <= maxPrepareAttempts; attempt += 1) {
+        await ensureContentScriptReadyOnTab('openai-auth', tabId, {
+          inject: OPENAI_AUTH_INJECT_FILES,
+          injectSource: 'openai-auth',
+          timeoutMs: attempt === 1 ? 45000 : 30000,
+          retryDelayMs: 900,
+          logMessage: attempt === 1
+            ? `步骤 ${step}：认证页仍在切换，正在等待页面恢复后继续确认提交流程...`
+            : `步骤 ${step}：认证页刚跳转或刷新，正在等待内容脚本重新接回后继续确认（第 ${attempt}/${maxPrepareAttempts} 次）...`,
+        });
+
+        if (attempt > 1 && typeof waitForTabStableComplete === 'function') {
+          await waitForTabStableComplete(tabId, {
+            timeoutMs: 20000,
+            retryDelayMs: 300,
+            stableMs: 800,
+            initialDelayMs: 300,
+          }).catch(() => null);
+        }
+
+        try {
+          result = await sendToContentScriptResilient('openai-auth', prepareRequest, {
+            timeoutMs: 30000,
+            retryDelayMs: 700,
+            logMessage: `步骤 ${step}：密码已提交，正在确认是否进入下一页面，必要时自动恢复重试页...`,
+          });
+          lastRecoverableError = null;
+          break;
+        } catch (error) {
+          if (!isStep3FinalizeRecoverableTransportError(error)) {
+            throw error;
+          }
+
+          lastRecoverableError = error;
+          if (attempt < maxPrepareAttempts) {
+            if (typeof addLog === 'function') {
+              await addLog(
+                `步骤 ${step}：认证页提交后发生短暂通信中断，准备重新接回并继续确认页面状态（第 ${attempt}/${maxPrepareAttempts} 次）。原因：${error?.message || error}`,
+                'warn'
+              );
+            }
+            continue;
+          }
+
+          const message = `步骤 ${step}：认证页在提交后切换过程中页面通信超时，已重新接回确认 ${maxPrepareAttempts} 次仍未成功。请重试当前轮。`;
           if (typeof addLog === 'function') {
             await addLog(message, 'warn');
           }
           throw new Error(message);
         }
-        throw error;
+      }
+
+      if (!result && lastRecoverableError) {
+        throw lastRecoverableError;
       }
 
       if (result?.error) {

@@ -135,6 +135,10 @@ function findSignupUseEmailTrigger() {
   return null;
 }
 
+function findSignupUsePhoneTrigger() {
+  return null;
+}
+
 function getPageTextSnapshot() {
   return 'Welcome to ChatGPT. Try our latest models.';
 }
@@ -279,6 +283,10 @@ function getSignupPasswordInput() {
 }
 
 function findSignupUseEmailTrigger() {
+  return null;
+}
+
+function findSignupUsePhoneTrigger() {
   return null;
 }
 

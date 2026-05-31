@@ -52,6 +52,12 @@ assert.strictEqual(
 );
 
 assert.strictEqual(
+  api.isRetryableContentScriptTransportError(new Error('认证页 页面刚完成跳转或刷新，内容脚本还没有重新接回；扩展已自动重试，但仍未恢复。请重试当前步骤。')),
+  true,
+  '认证页刚跳转导致内容脚本未接回时应沿用可重试分支'
+);
+
+assert.strictEqual(
   api.isRetryableContentScriptTransportError(new Error('按钮不存在')),
   false,
   '真实业务错误不应被误判为可重试传输错误'

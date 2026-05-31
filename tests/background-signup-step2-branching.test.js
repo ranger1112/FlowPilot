@@ -922,8 +922,59 @@ test('signup flow helper finalizes step 3 submit by reusing signup verification 
   });
 });
 
-test('signup flow helper rewrites retryable step 3 finalize transport timeout into a Chinese error', async () => {
+test('signup flow helper retries step 3 finalization after auth page reconnects', async () => {
+  let ensureCalls = 0;
+  let sendCalls = 0;
+  let stableCalls = 0;
   const logs = [];
+
+  const helpers = signupFlowApi.createSignupFlowHelpers({
+    addLog: async (message, level = 'info') => {
+      logs.push({ message, level });
+    },
+    buildGeneratedAliasEmail: () => '',
+    chrome: { tabs: { get: async () => ({ id: 31, url: 'https://auth.openai.com/create-account/password' }) } },
+    ensureContentScriptReadyOnTab: async () => {
+      ensureCalls += 1;
+    },
+    ensureHotmailAccountForFlow: async () => ({}),
+    ensureLuckmailPurchaseForFlow: async () => ({}),
+    isGeneratedAliasProvider: () => false,
+    isReusableGeneratedAliasEmail: () => false,
+    isHotmailProvider: () => false,
+    isRetryableContentScriptTransportError: (error) => /页面刚完成跳转或刷新|内容脚本还没有重新接回/i.test(error?.message || String(error || '')),
+    isLuckmailProvider: () => false,
+    isSignupEmailVerificationPageUrl: () => false,
+    isSignupPasswordPageUrl: () => true,
+    reuseOrCreateTab: async () => 31,
+    sendToContentScriptResilient: async () => {
+      sendCalls += 1;
+      if (sendCalls === 1) {
+        throw new Error('认证页 页面刚完成跳转或刷新，内容脚本还没有重新接回；扩展已自动重试，但仍未恢复。请重试当前步骤。');
+      }
+      return { ready: true, retried: 1 };
+    },
+    setEmailState: async () => {},
+    SIGNUP_ENTRY_URL: 'https://chatgpt.com/',
+    OPENAI_AUTH_INJECT_FILES: ['content/utils.js', 'flows/openai/content/openai-auth.js'],
+    waitForTabStableComplete: async () => {
+      stableCalls += 1;
+    },
+    waitForTabUrlMatch: async () => null,
+  });
+
+  const result = await helpers.finalizeSignupPasswordSubmitInTab(31, 'Secret123!', 3);
+
+  assert.deepStrictEqual(result, { ready: true, retried: 1 });
+  assert.equal(sendCalls, 2);
+  assert.equal(ensureCalls, 2);
+  assert.equal(stableCalls, 1);
+  assert.equal(logs.some(({ message, level }) => level === 'warn' && /短暂通信中断/.test(message)), true);
+});
+
+test('signup flow helper rewrites retryable step 3 finalize transport timeout into a Chinese error after reconnect attempts', async () => {
+  const logs = [];
+  let sendCalls = 0;
 
   const helpers = signupFlowApi.createSignupFlowHelpers({
     addLog: async (message, level = 'info') => {
@@ -943,6 +994,7 @@ test('signup flow helper rewrites retryable step 3 finalize transport timeout in
     isSignupPasswordPageUrl: () => true,
     reuseOrCreateTab: async () => 31,
     sendToContentScriptResilient: async () => {
+      sendCalls += 1;
       throw new Error('Content script on openai-auth did not respond in 45s. Try refreshing the tab and retry.');
     },
     setEmailState: async () => {},
@@ -953,13 +1005,13 @@ test('signup flow helper rewrites retryable step 3 finalize transport timeout in
 
   await assert.rejects(
     () => helpers.finalizeSignupPasswordSubmitInTab(31, 'Secret123!', 3),
-    /步骤 3：认证页在提交后切换过程中页面通信超时/
+    /步骤 3：认证页在提交后切换过程中页面通信超时，已重新接回确认 3 次仍未成功/
   );
 
-  assert.deepStrictEqual(logs, [
-    {
-      message: '步骤 3：认证页在提交后切换过程中页面通信超时，未能重新就绪，暂时无法确认是否进入下一页面。请重试当前轮。',
-      level: 'warn',
-    },
-  ]);
+  assert.equal(sendCalls, 3);
+  assert.equal(logs.filter(({ message, level }) => level === 'warn' && /短暂通信中断/.test(message)).length, 2);
+  assert.equal(
+    logs.some(({ message, level }) => level === 'warn' && /已重新接回确认 3 次仍未成功/.test(message)),
+    true
+  );
 });

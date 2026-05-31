@@ -9515,7 +9515,7 @@ function isStopError(error) {
 
 function isRetryableContentScriptTransportError(error) {
   const message = String(typeof error === 'string' ? error : error?.message || '');
-  return /back\/forward cache|message channel is closed|Receiving end does not exist|port closed before a response was received|A listener indicated an asynchronous response|内容脚本\s+\d+(?:\.\d+)?\s*秒内未响应|did not respond in \d+s|failed to fetch|networkerror|network error|fetch failed|load failed/i.test(message);
+  return /back\/forward cache|message channel is closed|Receiving end does not exist|port closed before a response was received|A listener indicated an asynchronous response|页面刚完成跳转或刷新|内容脚本还没有重新接回|内容脚本\s+\d+(?:\.\d+)?\s*秒内未响应|did not respond in \d+s|failed to fetch|networkerror|network error|fetch failed|load failed/i.test(message);
 }
 
 function isStepFetchNetworkRetryableError(error) {
