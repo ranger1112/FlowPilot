@@ -2828,10 +2828,12 @@ const STEP4_405_RECOVERY_ERROR_PREFIX = 'STEP4_405_RECOVERY_LIMIT::';
 const STEP4_405_RECOVERY_LIMIT = 3;
 const SIGNUP_USER_ALREADY_EXISTS_ERROR_PREFIX = 'SIGNUP_USER_ALREADY_EXISTS::';
 const SIGNUP_PHONE_PASSWORD_MISMATCH_ERROR_PREFIX = 'SIGNUP_PHONE_PASSWORD_MISMATCH::';
+const SIGNUP_CREATE_ACCOUNT_FAILED_ERROR_PREFIX = 'SIGNUP_CREATE_ACCOUNT_FAILED::';
 const AUTH_MAX_CHECK_ATTEMPTS_ERROR_PREFIX = 'AUTH_MAX_CHECK_ATTEMPTS::';
 const STEP8_EMAIL_IN_USE_ERROR_PREFIX = 'STEP8_EMAIL_IN_USE::';
 const SIGNUP_EMAIL_EXISTS_PATTERN = /与此电子邮件地址相关联的帐户已存在|この(?:メールアドレス|メール|電子メール)(?:に関連付けられた)?アカウントは(?:既に|すでに)存在|メールアドレス.*(?:既に|すでに)存在|account\s+associated\s+with\s+this\s+email\s+address\s+already\s+exists|email\s+address.*already\s+exists/i;
 const SIGNUP_PHONE_PASSWORD_MISMATCH_PATTERN = /incorrect\s+phone\s+number\s+or\s+password|phone\s+number\s+or\s+password|電話番号またはパスワード|電話番号.*アカウントは(?:既に|すでに)存在|与此(?:电话|手机)号码相关联的帐户已存在|account\s+associated\s+with\s+this\s+phone\s+number\s+already\s+exists/i;
+const SIGNUP_CREATE_ACCOUNT_FAILED_PATTERN = /创建(?:帐户|账户|账号)失败，请重试|(?:帐户|账户|账号)创建失败，请重试|アカウント(?:の)?作成に失敗.*(?:再試行|もう一度)|failed\s+to\s+create\s+(?:your\s+)?account.*try\s+again|account\s+creation\s+failed.*try\s+again|couldn'?t\s+create\s+(?:your\s+)?account.*try\s+again/i;
 
 const authPageRecovery = self.MultiPageAuthPageRecovery?.createAuthPageRecovery?.({
   detailPattern: AUTH_TIMEOUT_ERROR_DETAIL_PATTERN,
@@ -2896,6 +2898,14 @@ function createSignupPhonePasswordMismatchError(detailText = '') {
   );
 }
 
+function createSignupCreateAccountFailedError(detailText = '') {
+  const detail = String(detailText || '').replace(/\s+/g, ' ').trim();
+  const suffix = detail ? `页面提示：${detail}` : '页面提示创建帐户失败，请重试。';
+  return new Error(
+    `${SIGNUP_CREATE_ACCOUNT_FAILED_ERROR_PREFIX}步骤 3：检测到创建帐户失败，需要重新开始当前轮。${suffix}`
+  );
+}
+
 function createAuthMaxCheckAttemptsError() {
   return new Error(`${AUTH_MAX_CHECK_ATTEMPTS_ERROR_PREFIX}max_check_attempts on auth retry page; restart the current auth step without clicking Retry.`);
 }
@@ -2931,7 +2941,7 @@ function getVisibleFieldErrorText() {
 
 function getSignupPasswordFieldErrorText() {
   const text = getVisibleFieldErrorText();
-  if (text && SIGNUP_PHONE_PASSWORD_MISMATCH_PATTERN.test(text)) {
+  if (text && (SIGNUP_PHONE_PASSWORD_MISMATCH_PATTERN.test(text) || SIGNUP_CREATE_ACCOUNT_FAILED_PATTERN.test(text))) {
     return text;
   }
 
@@ -2939,7 +2949,7 @@ function getSignupPasswordFieldErrorText() {
   if (passwordInput) {
     const wrapper = passwordInput.closest('form, [data-rac], [role="group"], section, div');
     const wrapperText = (wrapper?.textContent || '').replace(/\s+/g, ' ').trim();
-    if (wrapperText && SIGNUP_PHONE_PASSWORD_MISMATCH_PATTERN.test(wrapperText)) {
+    if (wrapperText && (SIGNUP_PHONE_PASSWORD_MISMATCH_PATTERN.test(wrapperText) || SIGNUP_CREATE_ACCOUNT_FAILED_PATTERN.test(wrapperText))) {
       return wrapperText;
     }
   }
@@ -5310,6 +5320,12 @@ async function prepareSignupVerificationFlow(payload = {}, timeout = 30000) {
     if (snapshot.state === 'password') {
       if (snapshot.passwordErrorText) {
         log(`${prepareLogLabel}：检测到密码页报错“${snapshot.passwordErrorText}”，当前轮将回到步骤 1 重新开始。`, 'warn');
+        if (
+          typeof SIGNUP_CREATE_ACCOUNT_FAILED_PATTERN !== 'undefined'
+          && SIGNUP_CREATE_ACCOUNT_FAILED_PATTERN.test(snapshot.passwordErrorText)
+        ) {
+          throw createSignupCreateAccountFailedError(snapshot.passwordErrorText);
+        }
         throw createSignupPhonePasswordMismatchError(snapshot.passwordErrorText);
       }
       if (!passwordPageDiagnosticsLogged) {

@@ -152,8 +152,10 @@ const bundle = [
   extractFunction('isAddPhoneAuthState'),
   extractFunction('isMail2925ThreadTerminatedError'),
   extractFunction('isSignupPhonePasswordMismatchFailure'),
+  extractFunction('isSignupCreateAccountRetryableFailure'),
   extractFunction('getSignupPhonePasswordMismatchRestartPayload'),
   extractFunction('restartSignupPhonePasswordMismatchAttemptFromNode'),
+  extractFunction('restartSignupCreateAccountFailedAttemptFromNode'),
   extractFunction('isSignupUserAlreadyExistsFailure'),
   extractFunction('isPlusCheckoutNonFreeTrialFailure'),
   extractFunction('isPlusCheckoutRestartStep'),
@@ -1049,4 +1051,204 @@ return {
   assert.equal(currentState.password, 'Secret123!');
   assert.equal(events.logs.some(({ message }) => /节点 fill-password：检测到手机号\/密码不匹配/.test(message)), true);
   assert.equal(events.logs.some(({ message }) => /节点 fill-password：已清空本轮注册手机号与接码订单/.test(message)), true);
+});
+
+test('auto-run restarts from step 1 three times when step 3 reports account creation failed', async () => {
+  const api = new Function(`
+const AUTO_STEP_DELAYS = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 };
+const LAST_STEP_ID = 10;
+const FINAL_OAUTH_CHAIN_START_STEP = 7;
+const SIGNUP_METHOD_PHONE = 'phone';
+const chrome = { tabs: { update: async () => {} }, runtime: { sendMessage: async () => {} } };
+
+let remainingFailures = 3;
+let currentState = {
+  email: '',
+  password: 'Secret123!',
+  signupMethod: 'phone',
+  accountIdentifierType: 'phone',
+  accountIdentifier: '+6283873731384',
+  signupPhoneNumber: '+6283873731384',
+  signupPhoneActivation: { phoneNumber: '+6283873731384', activationId: 'phone-1' },
+  stepStatuses: {
+    1: 'pending',
+    2: 'pending',
+    3: 'pending',
+    4: 'pending',
+    5: 'pending',
+    6: 'pending',
+    7: 'pending',
+    8: 'pending',
+    9: 'pending',
+    10: 'pending',
+  },
+};
+const events = { steps: [], invalidations: [], logs: [], setStateCalls: [] };
+
+async function addLog(message, level = 'info') { events.logs.push({ message, level }); }
+async function ensureAutoEmailReady() { return ''; }
+async function broadcastAutoRunStatus() {}
+async function ensureResolvedSignupMethodForRun() { return 'phone'; }
+async function getState() { return currentState; }
+async function setState(updates) {
+  currentState = {
+    ...currentState,
+    ...updates,
+    stepStatuses: updates.stepStatuses ? { ...updates.stepStatuses } : currentState.stepStatuses,
+  };
+  events.setStateCalls.push(updates);
+}
+function isStopError(error) { return (error?.message || String(error || '')) === '流程已被用户停止。'; }
+function isStepDoneStatus(status) { return status === 'completed' || status === 'manual_completed' || status === 'skipped'; }
+async function executeStepAndWait(step) {
+  events.steps.push(step);
+  if (step === 3 && remainingFailures > 0) {
+    remainingFailures -= 1;
+    throw new Error('SIGNUP_CREATE_ACCOUNT_FAILED::步骤 3：检测到创建帐户失败，需要重新开始当前轮。页面提示：创建帐户失败，请重试');
+  }
+}
+async function getTabId() { return 1; }
+async function invalidateDownstreamAfterStepRestart(step, options = {}) {
+  events.invalidations.push({ step, options });
+  currentState = {
+    ...currentState,
+    stepStatuses: {
+      1: currentState.stepStatuses[1] || 'completed',
+      2: 'pending',
+      3: 'pending',
+      4: 'pending',
+      5: 'pending',
+      6: 'pending',
+      7: 'pending',
+      8: 'pending',
+      9: 'pending',
+      10: 'pending',
+    },
+  };
+}
+function getLoginAuthStateLabel(state) { return state || 'unknown'; }
+function getErrorMessage(error) { return error?.message || String(error || ''); }
+async function getLoginAuthStateFromContent() { return { state: 'password_page', url: 'https://auth.openai.com/create-account/password' }; }
+
+${bundle}
+
+return {
+  async run() {
+    await runAutoSequenceFromStep(1, {
+      targetRun: 1,
+      totalRuns: 1,
+      attemptRuns: 1,
+      continued: false,
+    });
+    return { events, currentState };
+  },
+};
+`)();
+
+  const { events } = await api.run();
+
+  assert.deepStrictEqual(events.steps, [
+    1, 2, 3,
+    1, 2, 3,
+    1, 2, 3,
+    1, 2, 3,
+    4, 5, 6, 7, 8, 9, 10,
+  ]);
+  assert.deepStrictEqual(events.invalidations.map(({ step }) => step), [1, 1, 1]);
+  assert.equal(events.logs.filter(({ message }) => /检测到创建帐户失败/.test(message)).length, 3);
+  assert.equal(events.logs.some(({ message }) => /第 3\/3 次重试/.test(message)), true);
+});
+
+test('auto-run stops after three account creation failure restarts', async () => {
+  const api = new Function(`
+const AUTO_STEP_DELAYS = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 };
+const LAST_STEP_ID = 10;
+const FINAL_OAUTH_CHAIN_START_STEP = 7;
+const SIGNUP_METHOD_PHONE = 'phone';
+const chrome = { tabs: { update: async () => {} }, runtime: { sendMessage: async () => {} } };
+let currentState = {
+  password: 'Secret123!',
+  signupMethod: 'phone',
+  accountIdentifierType: 'phone',
+  accountIdentifier: '+6283873731384',
+  signupPhoneNumber: '+6283873731384',
+  stepStatuses: {
+    1: 'pending',
+    2: 'pending',
+    3: 'pending',
+    4: 'pending',
+    5: 'pending',
+    6: 'pending',
+    7: 'pending',
+    8: 'pending',
+    9: 'pending',
+    10: 'pending',
+  },
+};
+const events = { steps: [], invalidations: [], logs: [], setStateCalls: [] };
+async function addLog(message, level = 'info') { events.logs.push({ message, level }); }
+async function ensureAutoEmailReady() { return ''; }
+async function broadcastAutoRunStatus() {}
+async function ensureResolvedSignupMethodForRun() { return 'phone'; }
+async function getState() { return currentState; }
+async function setState(updates) {
+  currentState = { ...currentState, ...updates, stepStatuses: updates.stepStatuses ? { ...updates.stepStatuses } : currentState.stepStatuses };
+  events.setStateCalls.push(updates);
+}
+function isStopError(error) { return (error?.message || String(error || '')) === '流程已被用户停止。'; }
+function isStepDoneStatus(status) { return status === 'completed' || status === 'manual_completed' || status === 'skipped'; }
+async function executeStepAndWait(step) {
+  events.steps.push(step);
+  if (step === 3) {
+    throw new Error('SIGNUP_CREATE_ACCOUNT_FAILED::步骤 3：检测到创建帐户失败，需要重新开始当前轮。页面提示：创建帐户失败，请重试');
+  }
+}
+async function getTabId() { return 1; }
+async function invalidateDownstreamAfterStepRestart(step, options = {}) {
+  events.invalidations.push({ step, options });
+  currentState = {
+    ...currentState,
+    stepStatuses: {
+      1: currentState.stepStatuses[1] || 'completed',
+      2: 'pending',
+      3: 'pending',
+      4: 'pending',
+      5: 'pending',
+      6: 'pending',
+      7: 'pending',
+      8: 'pending',
+      9: 'pending',
+      10: 'pending',
+    },
+  };
+}
+function getLoginAuthStateLabel(state) { return state || 'unknown'; }
+function getErrorMessage(error) { return error?.message || String(error || ''); }
+async function getLoginAuthStateFromContent() { return { state: 'password_page', url: 'https://auth.openai.com/create-account/password' }; }
+
+${bundle}
+
+return {
+  async run() {
+    try {
+      await runAutoSequenceFromStep(1, {
+        targetRun: 1,
+        totalRuns: 1,
+        attemptRuns: 1,
+        continued: false,
+      });
+      return { threw: false, events };
+    } catch (error) {
+      return { threw: true, error: error.message, events };
+    }
+  },
+};
+`)();
+
+  const result = await api.run();
+
+  assert.equal(result.threw, true);
+  assert.match(result.error, /SIGNUP_CREATE_ACCOUNT_FAILED::/);
+  assert.deepStrictEqual(result.events.invalidations.map(({ step }) => step), [1, 1, 1]);
+  assert.equal(result.events.logs.some(({ message, level }) => level === 'error' && /创建帐户失败已重试 3 次仍未成功/.test(message)), true);
 });

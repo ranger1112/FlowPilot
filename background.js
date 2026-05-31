@@ -9712,6 +9712,11 @@ function isSignupPhonePasswordMismatchFailure(error) {
   return /SIGNUP_PHONE_PASSWORD_MISMATCH::/i.test(message);
 }
 
+function isSignupCreateAccountRetryableFailure(error) {
+  const message = getErrorMessage(error);
+  return /SIGNUP_CREATE_ACCOUNT_FAILED::|创建(?:帐户|账户|账号)失败，请重试|(?:帐户|账户|账号)创建失败，请重试|failed\s+to\s+create\s+(?:your\s+)?account.*try\s+again|account\s+creation\s+failed.*try\s+again|couldn'?t\s+create\s+(?:your\s+)?account.*try\s+again/i.test(message);
+}
+
 function getSignupPhonePasswordMismatchRestartPayload(preservedState = {}) {
   const preservedEmail = String(preservedState.email || '').trim();
   const preservedPassword = String(preservedState.password || '').trim();
@@ -9788,6 +9793,41 @@ async function restartSignupPhonePasswordMismatchAttemptFromNode(nodeId, restart
   if (shouldClearSignupPhoneRuntime) {
     await addLog(`节点 ${normalizedNodeId}：已清空本轮注册手机号与接码订单，下一次重开将重新获取号码。`, 'warn');
   }
+  if (Object.keys(restorePayload).length) {
+    await setState(restorePayload);
+  }
+}
+
+async function restartSignupCreateAccountFailedAttemptFromNode(nodeId, restartCount, error) {
+  const preservedState = await getState();
+  const preservedEmail = String(preservedState.email || '').trim();
+  const preservedPassword = String(preservedState.password || '').trim();
+  const accountIdentifierType = String(preservedState.accountIdentifierType || '').trim().toLowerCase();
+  const activeSignupPhoneNumber = String(
+    preservedState.signupPhoneNumber
+    || preservedState.signupPhoneActivation?.phoneNumber
+    || (accountIdentifierType === 'phone' ? preservedState.accountIdentifier : '')
+    || ''
+  ).trim();
+  const emailSuffix = preservedEmail ? `当前邮箱：${preservedEmail}；` : '';
+  const phoneSuffix = activeSignupPhoneNumber ? `当前手机号：${activeSignupPhoneNumber}；` : '';
+  const normalizedNodeId = String(nodeId || '').trim() || 'fill-password';
+  await addLog(
+    `节点 ${normalizedNodeId}：检测到创建帐户失败，准备回到节点 open-chatgpt 重新开始（第 ${restartCount}/3 次重试）。${phoneSuffix}${emailSuffix}原因：${getErrorMessage(error)}`,
+    'warn'
+  );
+  if (typeof invalidateDownstreamAfterNodeRestart === 'function') {
+    await invalidateDownstreamAfterNodeRestart('open-chatgpt', {
+      logLabel: `节点 ${normalizedNodeId} 检测到创建帐户失败后准备回到 open-chatgpt 重试（第 ${restartCount}/3 次）`,
+    });
+  } else {
+    await invalidateDownstreamAfterStepRestart(1, {
+      logLabel: `节点 ${normalizedNodeId} 检测到创建帐户失败后准备回到 open-chatgpt 重试（第 ${restartCount}/3 次）`,
+    });
+  }
+  const restorePayload = {};
+  if (preservedEmail) restorePayload.email = preservedEmail;
+  if (preservedPassword) restorePayload.password = preservedPassword;
   if (Object.keys(restorePayload).length) {
     await setState(restorePayload);
   }
@@ -13151,6 +13191,7 @@ async function runAutoSequenceFromNodeGraph(startNodeId, context = {}) {
   let gpcCheckoutRestartCount = 0;
   let plusCheckoutRestartCount = 0;
   let step4RestartCount = 0;
+  let signupCreateAccountFailedRestartCount = 0;
   const nodeIdleRestartCounts = new Map();
   let currentStartNodeId = String(startNodeId || '').trim();
   let continueCurrentAttempt = continued;
@@ -13418,6 +13459,20 @@ async function runAutoSequenceFromNodeGraph(startNodeId, context = {}) {
         if (isSignupPhonePasswordMismatchFailure(err)) {
           step4RestartCount += 1;
           await restartSignupPhonePasswordMismatchAttemptFromNode('fill-password', step4RestartCount, err);
+          setRestartNode('open-chatgpt');
+          restartFromStep1WithCurrentEmail = true;
+          continue;
+        }
+        if (isSignupCreateAccountRetryableFailure(err)) {
+          signupCreateAccountFailedRestartCount += 1;
+          if (signupCreateAccountFailedRestartCount > 3) {
+            await addLog(
+              `节点 fill-password：创建帐户失败已重试 3 次仍未成功，停止自动重试。原因：${getErrorMessage(err)}`,
+              'error'
+            );
+            throw err;
+          }
+          await restartSignupCreateAccountFailedAttemptFromNode('fill-password', signupCreateAccountFailedRestartCount, err);
           setRestartNode('open-chatgpt');
           restartFromStep1WithCurrentEmail = true;
           continue;

@@ -1259,6 +1259,98 @@ return {
   assert.equal(result.logs.some(({ message }) => /检测到密码页报错/.test(message)), true);
 });
 
+test('prepareSignupVerificationFlow stops immediately when password page says account creation failed', async () => {
+  const api = new Function(`
+const logs = [];
+const clicks = [];
+let now = 0;
+
+Date.now = () => now;
+
+function throwIfStopped() {}
+function log(message, level = 'info') { logs.push({ message, level }); }
+async function sleep(ms = 0) { now += ms || 200; }
+function isVisibleElement() { return true; }
+function isActionEnabled() { return true; }
+function getActionText(el) { return el?.textContent || ''; }
+function getCurrentAuthRetryPageState() { return null; }
+function isPhoneVerificationPageReady() { return false; }
+function findResendVerificationCodeTrigger() { return null; }
+function isEmailVerificationPage() { return false; }
+function getPageTextSnapshot() { return '创建帐户失败，请重试'; }
+function getVerificationCodeTarget() { return null; }
+function is405MethodNotAllowedPage() { return false; }
+async function recoverCurrentAuthRetryPage() {}
+function createSignupUserAlreadyExistsError() { return new Error('user already exists'); }
+function getSignupPasswordInput() { return { value: 'Secret123!' }; }
+function getSignupPasswordSubmitButton() { return { textContent: 'Continue' }; }
+function isSignupEmailAlreadyExistsPage() { return false; }
+function isSignupPasswordErrorPage() { return false; }
+function getSignupPasswordTimeoutErrorPageState() { return null; }
+function isStep5Ready() { return false; }
+function getSignupPasswordFieldErrorText() { return '创建帐户失败，请重试'; }
+function simulateClick(target) { clicks.push(target?.textContent || 'clicked'); }
+async function humanPause() {}
+function fillInput() {}
+function logSignupPasswordDiagnostics() {}
+function createSignupPhonePasswordMismatchError(detailText = '') {
+  return new Error('SIGNUP_PHONE_PASSWORD_MISMATCH::' + detailText);
+}
+${extractFunction('createSignupCreateAccountFailedError')}
+const SIGNUP_CREATE_ACCOUNT_FAILED_ERROR_PREFIX = 'SIGNUP_CREATE_ACCOUNT_FAILED::';
+const SIGNUP_CREATE_ACCOUNT_FAILED_PATTERN = /创建(?:帐户|账户|账号)失败，请重试|(?:帐户|账户|账号)创建失败，请重试|failed\\s+to\\s+create\\s+(?:your\\s+)?account.*try\\s+again/i;
+
+const location = {
+  href: 'https://auth.openai.com/create-account/password',
+  pathname: '/create-account/password',
+};
+const document = {
+  readyState: 'complete',
+  title: '',
+  body: {
+    textContent: '创建密码 创建帐户失败，请重试',
+    innerText: '创建密码 创建帐户失败，请重试',
+  },
+  querySelector() {
+    return null;
+  },
+  querySelectorAll() {
+    return [];
+  },
+};
+
+${extractFunction('isSignupVerificationPageInteractiveReady')}
+${extractFunction('isVerificationPageStillVisible')}
+${extractFunction('isSignupProfilePageUrl')}
+${extractFunction('isLikelyLoggedInChatgptHomeUrl')}
+${extractFunction('getStep4PostVerificationState')}
+${extractFunction('inspectSignupVerificationState')}
+${extractFunction('waitForSignupVerificationTransition')}
+${extractFunction('prepareSignupVerificationFlow')}
+
+return {
+  async run() {
+    try {
+      await prepareSignupVerificationFlow({
+        password: 'Secret123!',
+        prepareLogLabel: '步骤 3 收尾',
+      }, 10000);
+      return { threw: false, logs, clicks };
+    } catch (error) {
+      return { threw: true, error: error.message, logs, clicks };
+    }
+  },
+};
+`)();
+
+  const result = await api.run();
+
+  assert.equal(result.threw, true);
+  assert.match(result.error, /SIGNUP_CREATE_ACCOUNT_FAILED::.*创建帐户失败，请重试/);
+  assert.equal(result.clicks.length, 0);
+  assert.equal(result.logs.some(({ message }) => /检测到密码页报错/.test(message)), true);
+});
+
 test('prepareSignupVerificationFlow waits instead of retrying while matched password submit is pending', async () => {
   const api = new Function(`
 const logs = [];
