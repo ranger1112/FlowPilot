@@ -2,8 +2,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
-const source = fs.readFileSync('flows/openai/content/openai-auth.js', 'utf8');
+const source = [
+  fs.readFileSync('flows/openai/content/openai-auth.js', 'utf8'),
+  fs.readFileSync('flows/openai/content/openai-auth-signup-phone-country.js', 'utf8'),
+].join('\n');
 const phoneAuthSource = fs.readFileSync('flows/openai/content/phone-auth.js', 'utf8');
+
+// openai-auth.js 已把 phone-country 工具薄壳化为 self.MultiPagePhoneCountryUtils 调用；
+// `new Function` 沙箱不会自动加载 manifest 里的 sibling content script，
+// 所以在测试启动期把 phone-country-utils.js 的 IFE 跑一次，
+// 让 globalThis.MultiPagePhoneCountryUtils 在整个 Node 进程内可见。
+new Function(fs.readFileSync('flows/openai/content/phone-country-utils.js', 'utf8'))();
 
 function extractFunction(name) {
   const markers = [`async function ${name}(`, `function ${name}(`];

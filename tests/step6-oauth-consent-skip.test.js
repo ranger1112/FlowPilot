@@ -2,7 +2,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
-const source = fs.readFileSync('flows/openai/content/openai-auth.js', 'utf8');
+// CHOOSE_ACCOUNT_* 5 个常量 + 10 个 chose-account helper 已搬到
+// flows/openai/content/openai-auth-choose-account.js（详见 #4 第二刀）。
+// 这里把两个文件 concat 作为 source，让 inline extractFunction / extractConst
+// 跟以前一样能命中——零调用点修改。
+const source = [
+  fs.readFileSync('flows/openai/content/openai-auth.js', 'utf8'),
+  fs.readFileSync('flows/openai/content/openai-auth-choose-account.js', 'utf8'),
+].join('\n');
 
 function extractFunction(name) {
   const markers = [`async function ${name}(`, `function ${name}(`];

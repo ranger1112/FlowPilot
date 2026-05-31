@@ -210,38 +210,16 @@ const LOGIN_EXTERNAL_IDP_PATTERN = /google|microsoft|apple|sso|single\s+sign[-\s
 const LOGIN_CODE_ONLY_ACTION_PATTERN = /one[-\s]*time|passcode|use\s+(?:a\s+)?code|验证码|一次性|ワンタイム|パスコード|認証コード|確認コード/i;
 
 const RESEND_VERIFICATION_CODE_PATTERN = /重新发送(?:验证码)?|再次发送(?:验证码)?|重发(?:验证码)?|未收到(?:验证码|邮件)|(?:コード|メール|確認コード|認証コード)(?:を)?再送信|再送信|新しい(?:コード|確認コード|認証コード)|届かない|受信していません|resend(?:\s+code)?|send\s+(?:a\s+)?new\s+code|send\s+(?:it\s+)?again|request\s+(?:a\s+)?new\s+code|didn'?t\s+receive/i;
-const CHOOSE_ACCOUNT_PAGE_PATTERN = new RegExp([
-  String.raw`choose\s+(?:an?\s+)?account`,
-  String.raw`select\s+(?:an?\s+)?account`,
-  String.raw`welcome\s+back`,
-  String.raw`\u9009\u62e9(?:\u4e00\u4e2a)?(?:\u5e10\u6237|\u8d26\u6237|\u8d26\u53f7)`,
-  String.raw`\u6b22\u8fce\u56de\u6765`,
-  String.raw`\u30a2\u30ab\u30a6\u30f3\u30c8.*(?:\u9078\u629e|\u9078\u3093\u3067)`,
-].join('|'), 'i');
-const CHOOSE_ACCOUNT_REMOVE_ACTION_PATTERN = /remove|delete|forget|close|dismiss|trash|\u79fb\u9664|\u5220\u9664|\u522a\u9664|\u524a\u9664|\u9589\u3058\u308b|\u524a\u9664/i;
-const CHOOSE_ACCOUNT_OTHER_ACCOUNT_PATTERN = new RegExp([
-  String.raw`another\s+account`,
-  String.raw`different\s+account`,
-  String.raw`other\s+account`,
-  String.raw`use\s+(?:a\s+)?different`,
-  String.raw`sign\s*in\s+(?:with\s+)?(?:another|different)`,
-  String.raw`log\s*in\s+(?:with\s+)?(?:another|different)`,
-  String.raw`\u5176\u4ed6(?:\u5e10\u6237|\u8d26\u6237|\u8d26\u53f7)`,
-  String.raw`\u53e6\u4e00\u4e2a(?:\u5e10\u6237|\u8d26\u6237|\u8d26\u53f7)`,
-  String.raw`\u5225\u306e\u30a2\u30ab\u30a6\u30f3\u30c8`,
-].join('|'), 'i');
-const CHOOSE_ACCOUNT_ACTION_SELECTOR = 'button, a, [role="button"], [role="link"], [tabindex]:not([tabindex="-1"])';
-const CHOOSE_ACCOUNT_CARD_SELECTOR = [
-  '[data-testid*="account" i]',
-  '[data-test-id*="account" i]',
-  '[class*="account" i]',
-  '[class*="user" i]',
-  '[class*="card" i]',
-  '[class*="option" i]',
-  '[class*="select" i]',
-  '[class*="list" i] > *',
-  'li',
-].join(', ');
+// CHOOSE_ACCOUNT_* \u5e38\u91cf\u5b9e\u9645\u5b9a\u4e49\u5728 flows/openai/content/openai-auth-choose-account.js\uff0c
+// \u8fd9\u91cc destructure \u51fa\u6765\u8ba9\u672c\u6587\u4ef6\u5176\u5b83\u5e38\u91cf/\u5de5\u5382\u8c03\u7528\u70b9\u65e0\u987b\u6539\u52a8\uff1b
+// \u540c\u6a21\u5757\u7684 10 \u4e2a helper \u51fd\u6570\u5728\u5e38\u91cf\u5757\u4e4b\u540e\u901a\u8fc7 createOpenAIAuthChooseAccount \u6ce8\u5165\u5e76 destructure\u3002
+const {
+  CHOOSE_ACCOUNT_PAGE_PATTERN,
+  CHOOSE_ACCOUNT_REMOVE_ACTION_PATTERN,
+  CHOOSE_ACCOUNT_OTHER_ACCOUNT_PATTERN,
+  CHOOSE_ACCOUNT_ACTION_SELECTOR,
+  CHOOSE_ACCOUNT_CARD_SELECTOR,
+} = self.MultiPageOpenAIAuthChooseAccount || {};
 const PHONE_RESEND_SERVER_ERROR_PREFIX = 'PHONE_RESEND_SERVER_ERROR::';
 const CONTACT_VERIFICATION_SERVER_ERROR_PATTERN = /this\s+page\s+isn['’]?t\s+working|currently\s+unable\s+to\s+handle\s+this\s+request|http\s+error\s+500|500\s+internal\s+server\s+error/i;
 
@@ -446,111 +424,11 @@ async function resendVerificationCode(step, timeout = 45000) {
   throw new Error('无法点击重新发送验证码按钮。URL: ' + location.href);
 }
 
-function is405MethodNotAllowedPage() {
-  const pageText = document.body?.textContent || '';
-  return AUTH_ROUTE_ERROR_PATTERN.test(pageText);
-}
-
-function getStep405RecoveryStateKey(step) {
-  return `__MULTIPAGE_STEP_${Number(step) || '?'}_405_RECOVERY_COUNT__`;
-}
-
-function getStep405StorageScope() {
-  if (typeof window !== 'undefined' && window) {
-    return window;
-  }
-  if (typeof globalThis !== 'undefined' && globalThis) {
-    return globalThis;
-  }
-  return {};
-}
-
-function getStep405RecoveryLimit(step) {
-  if (Number(step) !== 4) {
-    return 0;
-  }
-  return typeof STEP4_405_RECOVERY_LIMIT !== 'undefined'
-    ? STEP4_405_RECOVERY_LIMIT
-    : 3;
-}
-
-function getStep405RecoveryErrorPrefix(step) {
-  if (Number(step) !== 4) {
-    return '';
-  }
-  return typeof STEP4_405_RECOVERY_ERROR_PREFIX !== 'undefined'
-    ? STEP4_405_RECOVERY_ERROR_PREFIX
-    : 'STEP4_405_RECOVERY_LIMIT::';
-}
-
-function getStep405RecoveryCount(step) {
-  const key = getStep405RecoveryStateKey(step);
-  let value = '';
-  try {
-    if (typeof sessionStorage !== 'undefined' && sessionStorage?.getItem) {
-      value = sessionStorage.getItem(key) || '';
-    }
-  } catch {}
-  if (!value) {
-    value = getStep405StorageScope()[key];
-  }
-  return Math.max(0, Math.floor(Number(value) || 0));
-}
-
-function setStep405RecoveryCount(step, count) {
-  const key = getStep405RecoveryStateKey(step);
-  const value = String(Math.max(0, Math.floor(Number(count) || 0)));
-  try {
-    if (typeof sessionStorage !== 'undefined' && sessionStorage?.setItem) {
-      sessionStorage.setItem(key, value);
-    }
-  } catch {}
-  getStep405StorageScope()[key] = value;
-}
-
-function clearStep405RecoveryCount(step) {
-  const key = getStep405RecoveryStateKey(step);
-  try {
-    if (typeof sessionStorage !== 'undefined' && sessionStorage?.removeItem) {
-      sessionStorage.removeItem(key);
-    }
-  } catch {}
-  try {
-    delete getStep405StorageScope()[key];
-  } catch {}
-}
-
-function createStep405RecoveryLimitError(step, count) {
-  const normalizedStep = Number(step) || step || '?';
-  const limit = getStep405RecoveryLimit(normalizedStep) || count;
-  const message = `步骤 ${normalizedStep}：检测到 405 错误页面，已连续点击“重试”恢复 ${count}/${limit} 次仍未恢复，当前轮将结束并进入下一轮。URL: ${location.href}`;
-  return new Error(`${getStep405RecoveryErrorPrefix(normalizedStep)}${message}`);
-}
-
-async function handle405ResendError(step, remainingTimeout = 30000) {
-  const currentCount = getStep405RecoveryCount(step);
-  if (Number(step) === 4 && currentCount >= getStep405RecoveryLimit(step)) {
-    throw createStep405RecoveryLimitError(step, currentCount);
-  }
-
-  const nextCount = currentCount + 1;
-  setStep405RecoveryCount(step, nextCount);
-  const maxClickAttempts = Number(step) === 4 ? 1 : 5;
-  await recoverCurrentAuthRetryPage({
-    logLabel: Number(step) === 4
-      ? `步骤 ${step}：检测到 405 错误页面，正在点击“重试”恢复（总计 ${nextCount}/${getStep405RecoveryLimit(step)}）`
-      : `步骤 ${step}：检测到 405 错误页面，正在点击“重试”恢复`,
-    maxClickAttempts,
-    pathPatterns: [],
-    step,
-    timeoutMs: Math.max(1000, remainingTimeout),
-  });
-  if (is405MethodNotAllowedPage()) {
-    throw createStep405RecoveryLimitError(step, nextCount);
-  }
-  if (typeof clearStep405RecoveryCount === 'function') clearStep405RecoveryCount(step);
-  log(`步骤 ${step}：405 错误已恢复，页面已返回验证码页面。`);
-}
+// 405 路由错误恢复逻辑（is405MethodNotAllowedPage / handle405ResendError 等 10 个 helper
+// + AUTH_ROUTE_ERROR_PATTERN / STEP4_405_RECOVERY_* 三个常量）已搬到
+// flows/openai/content/openai-auth-route-recovery.js，并在本文件常量块附近通过
+// MultiPageOpenAIAuthRouteRecovery.createOpenAIAuthRouteRecovery({...}) 装配后
+// destructure 暴露给本作用域，所以这里的所有 callsite 无需修改。
 
 // ============================================================
 // Signup Entry Helpers
@@ -1400,760 +1278,55 @@ async function fillSignupEmailAndContinue(email, step) {
   };
 }
 
-function normalizePhoneDigits(value) {
-  const phoneCountryUtils = (typeof self !== 'undefined' ? self : globalThis)?.MultiPagePhoneCountryUtils
-    || globalThis?.MultiPagePhoneCountryUtils
-    || {};
-  if (typeof phoneCountryUtils.normalizePhoneDigits === 'function') {
-    return phoneCountryUtils.normalizePhoneDigits(value);
-  }
-  let digits = String(value || '').replace(/\D+/g, '');
-  if (digits.startsWith('00')) {
-    digits = digits.slice(2);
-  }
-  return digits;
-}
-
-function extractDialCodeFromText(value) {
-  const phoneCountryUtils = (typeof self !== 'undefined' ? self : globalThis)?.MultiPagePhoneCountryUtils
-    || globalThis?.MultiPagePhoneCountryUtils
-    || {};
-  if (typeof phoneCountryUtils.extractDialCodeFromText === 'function') {
-    return phoneCountryUtils.extractDialCodeFromText(value);
-  }
-  const match = String(value || '').match(/\(\+\s*(\d{1,4})\s*\)|\+\s*\(\s*(\d{1,4})\s*\)|\+\s*(\d{1,4})\b/);
-  return String(match?.[1] || match?.[2] || match?.[3] || '').trim();
-}
-
-function dispatchSignupPhoneFieldEvents(element) {
-  if (!element) return;
-  element.dispatchEvent(new Event('input', { bubbles: true }));
-  element.dispatchEvent(new Event('change', { bubbles: true }));
-}
-
-function normalizeSignupCountryLabel(value) {
-  const phoneCountryUtils = (typeof self !== 'undefined' ? self : globalThis)?.MultiPagePhoneCountryUtils
-    || globalThis?.MultiPagePhoneCountryUtils
-    || {};
-  if (typeof phoneCountryUtils.normalizeCountryLabel === 'function') {
-    return phoneCountryUtils.normalizeCountryLabel(value);
-  }
-  return String(value || '')
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/&/g, ' and ')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
-
-function getSignupCountryLabelAliases(value) {
-  const phoneCountryUtils = (typeof self !== 'undefined' ? self : globalThis)?.MultiPagePhoneCountryUtils
-    || globalThis?.MultiPagePhoneCountryUtils
-    || {};
-  if (typeof phoneCountryUtils.getCountryLabelAliases === 'function') {
-    return phoneCountryUtils.getCountryLabelAliases(value);
-  }
-  const aliases = new Set();
-  const addAlias = (alias) => {
-    const normalized = normalizeSignupCountryLabel(alias);
-    if (normalized) {
-      aliases.add(normalized);
-    }
-  };
-
-  const raw = String(value || '').trim();
-  addAlias(raw);
-
-  const normalized = normalizeSignupCountryLabel(raw);
-  const compact = normalized.replace(/\s+/g, '');
-  if (
-    /(?:^|\s)(?:gb|uk)(?:\s|$)/i.test(raw)
-    || /england|united\s*kingdom|great\s*britain|\bbritain\b/i.test(raw)
-    || /英国|英格兰|大不列颠/.test(raw)
-    || ['gb', 'uk', 'england', 'unitedkingdom', 'greatbritain', 'britain'].includes(compact)
-  ) {
-    [
-      'GB',
-      'UK',
-      'United Kingdom',
-      'Great Britain',
-      'Britain',
-      'England',
-      '英国',
-      '英格兰',
-      '大不列颠',
-    ].forEach(addAlias);
-  }
-
-  return Array.from(aliases);
-}
-
-function getSignupPhoneOptionLabel(option) {
-  const phoneCountryUtils = (typeof self !== 'undefined' ? self : globalThis)?.MultiPagePhoneCountryUtils
-    || globalThis?.MultiPagePhoneCountryUtils
-    || {};
-  if (typeof phoneCountryUtils.getOptionLabel === 'function') {
-    return phoneCountryUtils.getOptionLabel(option);
-  }
-  return String(option?.textContent || option?.label || '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function normalizeSignupCountryOptionValue(value) {
-  const phoneCountryUtils = (typeof self !== 'undefined' ? self : globalThis)?.MultiPagePhoneCountryUtils
-    || globalThis?.MultiPagePhoneCountryUtils
-    || {};
-  if (typeof phoneCountryUtils.normalizeCountryOptionValue === 'function') {
-    return phoneCountryUtils.normalizeCountryOptionValue(value);
-  }
-  return String(value || '').trim().toUpperCase();
-}
-
-function getSignupRegionDisplayName(regionCode, locale) {
-  const phoneCountryUtils = (typeof self !== 'undefined' ? self : globalThis)?.MultiPagePhoneCountryUtils
-    || globalThis?.MultiPagePhoneCountryUtils
-    || {};
-  if (typeof phoneCountryUtils.getRegionDisplayName === 'function') {
-    return phoneCountryUtils.getRegionDisplayName(regionCode, locale);
-  }
-  const normalizedRegionCode = normalizeSignupCountryOptionValue(regionCode);
-  const normalizedLocale = String(locale || '').trim();
-  if (!/^[A-Z]{2}$/.test(normalizedRegionCode) || !normalizedLocale || typeof Intl?.DisplayNames !== 'function') {
-    return '';
-  }
-  try {
-    return String(
-      new Intl.DisplayNames([normalizedLocale], { type: 'region' }).of(normalizedRegionCode) || ''
-    ).trim();
-  } catch {
-    return '';
-  }
-}
-
-function getSignupPhoneCountryMatchLabels(option) {
-  const phoneCountryUtils = (typeof self !== 'undefined' ? self : globalThis)?.MultiPagePhoneCountryUtils
-    || globalThis?.MultiPagePhoneCountryUtils
-    || {};
-  if (typeof phoneCountryUtils.getOptionMatchLabels === 'function') {
-    const rootScope = typeof self !== 'undefined' ? self : globalThis;
-    return phoneCountryUtils.getOptionMatchLabels(option, {
-      document: typeof document !== 'undefined' ? document : null,
-      navigator: rootScope?.navigator || globalThis?.navigator || null,
-      getOptionLabel: getSignupPhoneOptionLabel,
-    });
-  }
-
-  const labels = new Set();
-  const pushLabel = (value) => {
-    const label = String(value || '').replace(/\s+/g, ' ').trim();
-    if (label) {
-      labels.add(label);
-    }
-  };
-
-  pushLabel(getSignupPhoneOptionLabel(option));
-
-  const regionCode = normalizeSignupCountryOptionValue(option?.value);
-  if (/^[A-Z]{2}$/.test(regionCode)) {
-    pushLabel(regionCode);
-    pushLabel(getSignupRegionDisplayName(regionCode, 'en'));
-
-    const rootScope = typeof self !== 'undefined' ? self : globalThis;
-    const pageLocale = String(
-      document?.documentElement?.lang
-      || document?.documentElement?.getAttribute?.('lang')
-      || rootScope?.navigator?.language
-      || ''
-    ).trim();
-    if (pageLocale && !/^en(?:[-_]|$)/i.test(pageLocale)) {
-      pushLabel(getSignupRegionDisplayName(regionCode, pageLocale));
-    }
-  }
-
-  return Array.from(labels);
-}
-
-function isSameSignupCountryOption(left, right) {
-  if (!left || !right) {
-    return false;
-  }
-
-  const leftValue = normalizeSignupCountryOptionValue(left.value);
-  const rightValue = normalizeSignupCountryOptionValue(right.value);
-  if (leftValue && rightValue) {
-    return leftValue === rightValue;
-  }
-
-  return normalizeSignupCountryLabel(getSignupPhoneOptionLabel(left)) === normalizeSignupCountryLabel(getSignupPhoneOptionLabel(right));
-}
-
-function getSignupPhoneForm(phoneInput = getSignupPhoneInput()) {
-  return phoneInput?.closest?.('form') || null;
-}
-
-function getSignupPhoneControlRoots(phoneInput = getSignupPhoneInput()) {
-  const roots = [];
-  const addRoot = (root) => {
-    if (root && !roots.includes(root)) {
-      roots.push(root);
-    }
-  };
-
-  addRoot(phoneInput?.closest?.('form'));
-  addRoot(phoneInput?.closest?.('fieldset'));
-  addRoot(phoneInput?.closest?.('[data-rac]'));
-  addRoot(phoneInput?.closest?.('[role="group"]'));
-  addRoot(phoneInput?.parentElement);
-  addRoot(phoneInput?.parentElement?.parentElement);
-  addRoot(document);
-
-  return roots;
-}
-
-function querySignupPhoneCountryElements(root, selector) {
-  if (!root || !selector) {
-    return [];
-  }
-  if (typeof root.querySelectorAll === 'function') {
-    const directMatches = Array.from(root.querySelectorAll(selector));
-    if (directMatches.length > 0) {
-      return directMatches;
-    }
-  }
-  if (typeof root.querySelector === 'function') {
-    const selectors = String(selector || '')
-      .split(',')
-      .map((part) => part.trim())
-      .filter(Boolean);
-    const matches = [];
-    for (const part of selectors) {
-      const element = root.querySelector(part);
-      if (element && !matches.includes(element)) {
-        matches.push(element);
-      }
-    }
-    return matches;
-  }
-  return [];
-}
-
-function isSignupPhoneCountrySelect(select) {
-  if (!select) {
-    return false;
-  }
-  return Array.from(select.options || []).some((option) => (
-    extractDialCodeFromText(getSignupPhoneOptionLabel(option))
-    || /^[A-Z]{2}$/.test(normalizeSignupCountryOptionValue(option?.value))
-  ));
-}
-
-function getSignupPhoneCountrySelect(phoneInput = getSignupPhoneInput()) {
-  const selects = [];
-  for (const root of getSignupPhoneControlRoots(phoneInput)) {
-    for (const select of querySignupPhoneCountryElements(root, 'select')) {
-      if (!selects.includes(select)) {
-        selects.push(select);
-      }
-    }
-  }
-  return selects.find(isSignupPhoneCountrySelect) || selects[0] || null;
-}
-
-function getSignupPhoneSelectedCountryOption(phoneInput = getSignupPhoneInput()) {
-  const select = getSignupPhoneCountrySelect(phoneInput);
-  if (!select || select.selectedIndex < 0) {
-    return null;
-  }
-  return select.options?.[select.selectedIndex] || null;
-}
-
-function getSignupPhoneCountryButtonText(phoneInput = getSignupPhoneInput()) {
-  const button = getSignupPhoneCountryButton(phoneInput);
-  if (!button) return '';
-  const valueNode = button.querySelector('.react-aria-SelectValue');
-  return String(valueNode?.textContent || button.textContent || '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function getSignupPhoneCountryButton(phoneInput = getSignupPhoneInput()) {
-  const candidates = [];
-  for (const root of getSignupPhoneControlRoots(phoneInput)) {
-    const buttons = querySignupPhoneCountryElements(
-      root,
-      'button[aria-haspopup="listbox"], [role="button"][aria-haspopup="listbox"], [role="combobox"][aria-haspopup="listbox"], button[aria-expanded]'
-    );
-    for (const button of buttons) {
-      if (!candidates.includes(button)) {
-        candidates.push(button);
-      }
-    }
-  }
-  return candidates.find((button) => isVisibleElement(button) && extractDialCodeFromText(getActionText(button)))
-    || candidates.find(isVisibleElement)
-    || null;
-}
-
-function getSignupPhoneDisplayedDialCode(phoneInput = getSignupPhoneInput()) {
-  const buttonDialCode = extractDialCodeFromText(getSignupPhoneCountryButtonText(phoneInput));
-  if (buttonDialCode) {
-    return buttonDialCode;
-  }
-  const inputRoot = phoneInput?.closest?.('fieldset, form, [data-rac], div') || document;
-  const visibleText = String(inputRoot?.textContent || '').replace(/\s+/g, ' ').trim();
-  const rootDialCode = extractDialCodeFromText(visibleText);
-  if (rootDialCode) {
-    return rootDialCode;
-  }
-  const pageDialCode = extractDialCodeFromText(getPageTextSnapshot());
-  if (pageDialCode) {
-    return pageDialCode;
-  }
-  return '';
-}
-
-function getSignupPhoneHiddenNumberInput(phoneInput = getSignupPhoneInput()) {
-  const form = getSignupPhoneForm(phoneInput);
-  if (!form || typeof form.querySelector !== 'function') {
-    return null;
-  }
-  return form.querySelector('input[name="phoneNumber"]');
-}
-
-function resolveSignupPhoneDialCodeFromNumber(phoneNumber = '', texts = []) {
-  const phoneCountryUtils = (typeof self !== 'undefined' ? self : globalThis)?.MultiPagePhoneCountryUtils
-    || globalThis?.MultiPagePhoneCountryUtils
-    || {};
-  if (typeof phoneCountryUtils.resolveDialCodeFromPhoneNumber === 'function') {
-    return phoneCountryUtils.resolveDialCodeFromPhoneNumber(phoneNumber, texts);
-  }
-  const digits = normalizePhoneDigits(phoneNumber);
-  if (!digits) {
-    return '';
-  }
-
-  const textDialCodes = texts
-    .map((text) => normalizePhoneDigits(extractDialCodeFromText(text)))
-    .filter((dialCode) => dialCode && digits.startsWith(dialCode) && digits.length > dialCode.length)
-    .sort((left, right) => right.length - left.length);
-  if (textDialCodes[0]) {
-    return textDialCodes[0];
-  }
-
-  const knownDialCodes = [
-    '1246', '1264', '1268', '1284', '1340', '1345', '1441', '1473', '1649', '1664', '1670', '1671', '1684',
-    '1721', '1758', '1767', '1784', '1809', '1829', '1849', '1868', '1869', '1876',
-    '971', '962', '886', '880', '856', '855', '852', '853', '673', '672', '670', '599', '598', '597', '596',
-    '595', '594', '593', '592', '591', '590', '509', '508', '507', '506', '505', '504', '503', '502', '501',
-    '423', '421', '420', '389', '387', '386', '385', '383', '382', '381', '380', '379', '378', '377', '376',
-    '375', '374', '373', '372', '371', '370', '359', '358', '357', '356', '355', '354', '353', '352', '351',
-    '350', '299', '298', '297', '291', '290', '269', '268', '267', '266', '265', '264', '263', '262', '261',
-    '260', '258', '257', '256', '255', '254', '253', '252', '251', '250', '249', '248', '247', '246', '245',
-    '244', '243', '242', '241', '240', '239', '238', '237', '236', '235', '234', '233', '232', '231', '230',
-    '229', '228', '227', '226', '225', '224', '223', '222', '221', '220', '218', '216', '213', '212', '211',
-    '98', '95', '94', '93', '92', '91', '90', '89', '88', '86', '84', '82', '81', '66', '65', '64', '63',
-    '62', '61', '60', '58', '57', '56', '55', '54', '53', '52', '51', '49', '48', '47', '46', '45', '44',
-    '43', '41', '40', '39', '36', '34', '33', '32', '31', '30', '27', '20', '7', '1',
-  ];
-  return knownDialCodes.find((code) => digits.startsWith(code) && digits.length > code.length) || '';
-}
-
-function resolveSignupPhoneTargetDialCode(options = {}, targetOption = null) {
-  const optionDialCode = extractDialCodeFromText(getSignupPhoneOptionLabel(targetOption));
-  if (optionDialCode) {
-    return optionDialCode;
-  }
-
-  const countryText = String(options.countryLabel || '').trim();
-  if (/australia|澳大利亚/i.test(countryText)) return '61';
-  if (/thailand|泰国/i.test(countryText)) return '66';
-  if (/vietnam|越南/i.test(countryText)) return '84';
-  if (/england|united\s*kingdom|great\s*britain|\bbritain\b|英国|英格兰|uk|gb/i.test(countryText)) return '44';
-
-  return resolveSignupPhoneDialCodeFromNumber(options.phoneNumber);
-}
-
-function getSignupPhoneCountryTargetLabels(targetOption, options = {}) {
-  const labels = new Set();
-  const addLabel = (value) => {
-    getSignupCountryLabelAliases(value).forEach((alias) => labels.add(alias));
-  };
-
-  addLabel(options.countryLabel);
-  if (targetOption) {
-    getSignupPhoneCountryMatchLabels(targetOption).forEach(addLabel);
-  }
-
-  return Array.from(labels);
-}
-
-function doesSignupPhoneCountryTextMatchTarget(text, targetOption, options = {}) {
-  const normalizedText = normalizeSignupCountryLabel(text);
-  if (!normalizedText) {
-    return false;
-  }
-
-  const labels = getSignupPhoneCountryTargetLabels(targetOption, options);
-  if (labels.some((label) => (
-    label
-    && (
-      normalizedText === label
-      || (label.length > 1 && normalizedText.includes(label))
-      || (normalizedText.length > 2 && label.includes(normalizedText))
-    )
-  ))) {
-    return true;
-  }
-
-  const targetDialCode = resolveSignupPhoneTargetDialCode(options, targetOption);
-  return Boolean(targetDialCode && extractDialCodeFromText(text) === targetDialCode);
-}
-
-function isSignupPhoneCountrySelectionSynced(phoneInput, targetOption, options = {}) {
-  const targetDialCode = resolveSignupPhoneTargetDialCode(options, targetOption);
-  const displayedText = getSignupPhoneCountryButtonText(phoneInput);
-  const displayedDialCode = extractDialCodeFromText(displayedText);
-
-  if (targetDialCode && displayedDialCode) {
-    return displayedDialCode === targetDialCode
-      && (!displayedText || doesSignupPhoneCountryTextMatchTarget(displayedText, targetOption, options));
-  }
-
-  if (displayedText && doesSignupPhoneCountryTextMatchTarget(displayedText, targetOption, options)) {
-    return true;
-  }
-
-  const selectedOption = getSignupPhoneSelectedCountryOption(phoneInput);
-  if (selectedOption && targetOption && isSameSignupCountryOption(selectedOption, targetOption)) {
-    return !displayedDialCode || !targetDialCode || displayedDialCode === targetDialCode;
-  }
-
-  return Boolean(selectedOption && !targetOption && targetDialCode && displayedDialCode === targetDialCode);
-}
-
-function findSignupPhoneCountryOptionByLabel(phoneInput, countryLabel) {
-  const select = getSignupPhoneCountrySelect(phoneInput);
-  if (!select) {
-    return null;
-  }
-  const phoneCountryUtils = (typeof self !== 'undefined' ? self : globalThis)?.MultiPagePhoneCountryUtils
-    || globalThis?.MultiPagePhoneCountryUtils
-    || {};
-  if (typeof phoneCountryUtils.findOptionByCountryLabel === 'function') {
-    return phoneCountryUtils.findOptionByCountryLabel(select.options, countryLabel, {
-      document: typeof document !== 'undefined' ? document : null,
-      navigator: (typeof self !== 'undefined' ? self : globalThis)?.navigator || globalThis?.navigator || null,
-      getOptionLabel: getSignupPhoneOptionLabel,
-    });
-  }
-  const normalizedTargets = getSignupCountryLabelAliases(countryLabel);
-  if (normalizedTargets.length === 0) {
-    return null;
-  }
-
-  const options = Array.from(select.options || []);
-  return options.find((option) => (
-    getSignupPhoneCountryMatchLabels(option).some((label) => normalizedTargets.includes(normalizeSignupCountryLabel(label)))
-  ))
-    || options.find((option) => {
-      const normalizedLabels = getSignupPhoneCountryMatchLabels(option)
-        .map((label) => normalizeSignupCountryLabel(label))
-        .filter(Boolean);
-      return normalizedLabels.some((optionLabel) => normalizedTargets.some((normalizedTarget) => (
-          optionLabel.length > 2
-          && normalizedTarget.length > 2
-          && (optionLabel.includes(normalizedTarget) || normalizedTarget.includes(optionLabel))
-        )));
-    })
-    || null;
-}
-
-function findSignupPhoneCountryOptionByPhoneNumber(phoneInput, phoneNumber) {
-  const select = getSignupPhoneCountrySelect(phoneInput);
-  if (!select) {
-    return null;
-  }
-  const phoneCountryUtils = (typeof self !== 'undefined' ? self : globalThis)?.MultiPagePhoneCountryUtils
-    || globalThis?.MultiPagePhoneCountryUtils
-    || {};
-  if (typeof phoneCountryUtils.findOptionByPhoneNumber === 'function') {
-    return phoneCountryUtils.findOptionByPhoneNumber(select.options, phoneNumber, {
-      getOptionLabel: getSignupPhoneOptionLabel,
-    });
-  }
-  const digits = normalizePhoneDigits(phoneNumber);
-  if (!digits) {
-    return null;
-  }
-
-  let bestMatch = null;
-  let bestDialCodeLength = 0;
-  for (const option of Array.from(select.options || [])) {
-    const dialCode = normalizePhoneDigits(extractDialCodeFromText(getSignupPhoneOptionLabel(option)));
-    if (!dialCode || !digits.startsWith(dialCode)) {
-      continue;
-    }
-    if (dialCode.length > bestDialCodeLength) {
-      bestMatch = option;
-      bestDialCodeLength = dialCode.length;
-    }
-  }
-  return bestMatch;
-}
-
-async function trySelectSignupPhoneCountryOption(select, targetOption, phoneInput = getSignupPhoneInput(), options = {}) {
-  const performOperationWithDelay = typeof getOperationDelayRunner === 'function'
-    ? getOperationDelayRunner()
-    : async (metadata, operation) => {
-        const rootScope = typeof window !== 'undefined' ? window : globalThis;
-        const gate = rootScope?.CodexOperationDelay?.performOperationWithDelay;
-        return typeof gate === 'function' ? gate(metadata, operation) : operation();
-      };
-  if (!select || !targetOption) {
-    return false;
-  }
-  const selectedOption = select.selectedIndex >= 0
-    ? (select.options?.[select.selectedIndex] || null)
-    : null;
-  if (selectedOption && isSameSignupCountryOption(selectedOption, targetOption)) {
-    await performOperationWithDelay({ stepKey: 'signup-phone-entry', kind: 'select', label: 'signup-phone-country-select' }, async () => {
-      dispatchSignupPhoneFieldEvents(select);
-    });
-    await sleep(120);
-    return isSignupPhoneCountrySelectionSynced(phoneInput, targetOption, options);
-  }
-  await performOperationWithDelay({ stepKey: 'signup-phone-entry', kind: 'select', label: 'signup-phone-country-select' }, async () => {
-    select.value = String(targetOption.value || '');
-    dispatchSignupPhoneFieldEvents(select);
-  });
-  await sleep(250);
-  return isSignupPhoneCountrySelectionSynced(phoneInput, targetOption, options);
-}
-
-function getVisibleSignupPhoneCountryListboxOptions() {
-  const seen = new Set();
-  return Array.from(document.querySelectorAll('[role="listbox"] [role="option"], [role="option"]'))
-    .filter((option) => {
-      if (!option || seen.has(option)) {
-        return false;
-      }
-      seen.add(option);
-      return isVisibleElement(option);
-    });
-}
-
-function findSignupPhoneCountryListboxOption(targetOption, options = {}) {
-  const candidates = getVisibleSignupPhoneCountryListboxOptions();
-  const byLabel = candidates.find((option) => doesSignupPhoneCountryTextMatchTarget(getActionText(option), targetOption, options));
-  if (byLabel) {
-    return byLabel;
-  }
-
-  const phoneCountryUtils = (typeof self !== 'undefined' ? self : globalThis)?.MultiPagePhoneCountryUtils
-    || globalThis?.MultiPagePhoneCountryUtils
-    || {};
-  if (typeof phoneCountryUtils.findElementByDialCode === 'function') {
-    const byPhoneNumber = phoneCountryUtils.findElementByDialCode(candidates, options.phoneNumber, {
-      getText: getActionText,
-    });
-    if (byPhoneNumber) {
-      return byPhoneNumber;
-    }
-  }
-
-  const targetDialCode = resolveSignupPhoneTargetDialCode(options, targetOption);
-  if (!targetDialCode) {
-    const digits = normalizePhoneDigits(options.phoneNumber);
-    let bestMatch = null;
-    let bestDialCodeLength = 0;
-    for (const option of candidates) {
-      const dialCode = normalizePhoneDigits(extractDialCodeFromText(getActionText(option)));
-      if (!dialCode || !digits.startsWith(dialCode) || dialCode.length <= bestDialCodeLength) {
-        continue;
-      }
-      bestMatch = option;
-      bestDialCodeLength = dialCode.length;
-    }
-    return bestMatch;
-  }
-  return candidates.find((option) => extractDialCodeFromText(getActionText(option)) === targetDialCode) || null;
-}
-
-async function trySelectSignupPhoneCountryListboxOption(phoneInput, targetOption, options = {}) {
-  const performOperationWithDelay = typeof getOperationDelayRunner === 'function'
-    ? getOperationDelayRunner()
-    : async (metadata, operation) => {
-        const rootScope = typeof window !== 'undefined' ? window : globalThis;
-        const gate = rootScope?.CodexOperationDelay?.performOperationWithDelay;
-        return typeof gate === 'function' ? gate(metadata, operation) : operation();
-      };
-  const button = getSignupPhoneCountryButton(phoneInput);
-  if (!button) {
-    return false;
-  }
-
-  const getScrollableTargets = () => {
-    const seen = new Set();
-    const targets = [];
-    const pushTarget = (element) => {
-      if (!element || seen.has(element)) {
-        return;
-      }
-      seen.add(element);
-      const scrollHeight = Number(element.scrollHeight) || 0;
-      const clientHeight = Number(element.clientHeight) || 0;
-      if (scrollHeight > clientHeight + 2) {
-        targets.push(element);
-      }
-    };
-
-    getVisibleSignupPhoneCountryListboxOptions().forEach((option) => {
-      let current = option.parentElement || null;
-      let depth = 0;
-      while (current && depth < 6) {
-        pushTarget(current);
-        if (current === document.body || current === document.documentElement) {
-          break;
-        }
-        current = current.parentElement || null;
-        depth += 1;
-      }
-    });
-
-    Array.from(document.querySelectorAll('[role="listbox"]'))
-      .filter((listbox) => isVisibleElement(listbox))
-      .forEach(pushTarget);
-
-    return targets;
-  };
-
-  const dispatchListboxScroll = (element) => {
-    if (!element || typeof element.dispatchEvent !== 'function') {
-      return;
-    }
-    try {
-      element.dispatchEvent(typeof Event === 'function'
-        ? new Event('scroll', { bubbles: true })
-        : { type: 'scroll' });
-    } catch {
-      try {
-        element.dispatchEvent({ type: 'scroll' });
-      } catch { }
-    }
-  };
-
-  const resetListboxScroll = () => {
-    getScrollableTargets().forEach((target) => {
-      if ((Number(target.scrollTop) || 0) > 0) {
-        target.scrollTop = 0;
-        dispatchListboxScroll(target);
-      }
-    });
-  };
-
-  const scrollListboxDown = () => {
-    let scrolled = false;
-    getScrollableTargets().forEach((target) => {
-      const before = Number(target.scrollTop) || 0;
-      const maxScrollTop = Math.max(0, (Number(target.scrollHeight) || 0) - (Number(target.clientHeight) || 0));
-      if (maxScrollTop <= before + 1) {
-        return;
-      }
-      const step = Math.max(360, Math.floor((Number(target.clientHeight) || 0) * 0.85));
-      target.scrollTop = Math.min(maxScrollTop, before + step);
-      dispatchListboxScroll(target);
-      scrolled = true;
-    });
-    return scrolled;
-  };
-
-  await performOperationWithDelay({ stepKey: 'signup-phone-entry', kind: 'click', label: 'open-signup-phone-country-listbox' }, async () => {
-    simulateClick(button);
-  });
-  await sleep(200);
-  resetListboxScroll();
-
-  const start = Date.now();
-  let reachedListEndAt = 0;
-  while (Date.now() - start < 8000) {
-    throwIfStopped();
-    const option = findSignupPhoneCountryListboxOption(targetOption, options);
-    if (option) {
-      await performOperationWithDelay({ stepKey: 'signup-phone-entry', kind: 'select', label: 'signup-phone-country-listbox-option' }, async () => {
-        simulateClick(option);
-      });
-      await sleep(450);
-      if (isSignupPhoneCountrySelectionSynced(phoneInput, targetOption, options)) {
-        return true;
-      }
-    }
-
-    if (!scrollListboxDown()) {
-      reachedListEndAt += 1;
-      if (reachedListEndAt >= 6) {
-        break;
-      }
-      await sleep(150);
-      continue;
-    }
-    reachedListEndAt = 0;
-    await sleep(220);
-  }
-
-  return false;
-}
-
-async function ensureSignupPhoneCountrySelected(phoneInput, options = {}) {
-  const select = getSignupPhoneCountrySelect(phoneInput);
-  const hasCountryControl = Boolean(select || getSignupPhoneCountryButton(phoneInput));
-  if (!hasCountryControl) {
-    return {
-      hasSelect: false,
-      hasCountryControl: false,
-      matched: false,
-      selectedOption: null,
-    };
-  }
-
-  const byLabel = findSignupPhoneCountryOptionByLabel(phoneInput, options.countryLabel);
-  const byPhoneNumber = findSignupPhoneCountryOptionByPhoneNumber(phoneInput, options.phoneNumber);
-  const targets = [byLabel, byPhoneNumber, null].filter((target, index, list) => (
-    index === list.findIndex((item) => (
-      (!item && !target)
-      || (item && target && isSameSignupCountryOption(item, target))
-    ))
-  ));
-
-  for (const targetOption of targets) {
-    if (await trySelectSignupPhoneCountryOption(select, targetOption, phoneInput, options)) {
-      return {
-        hasSelect: Boolean(select),
-        hasCountryControl: true,
-        matched: true,
-        selectedOption: getSignupPhoneSelectedCountryOption(phoneInput),
-      };
-    }
-
-    if (await trySelectSignupPhoneCountryListboxOption(phoneInput, targetOption, options)) {
-      return {
-        hasSelect: Boolean(select),
-        hasCountryControl: true,
-        matched: true,
-        selectedOption: getSignupPhoneSelectedCountryOption(phoneInput),
-      };
-    }
-  }
-
-  return {
-    hasSelect: Boolean(select),
-    hasCountryControl: true,
-    matched: false,
-    selectedOption: getSignupPhoneSelectedCountryOption(phoneInput),
-  };
-}
+// signup-phone-country 探查 + 选择 helper：跟原 monolith 同款 32 个 helper（11 个
+// phone-country-utils 薄壳 thunk + 21 个 select / button / listbox / sync / ensure
+// 探查与点击逻辑），全部通过工厂注入。getSignupPhoneInput / getPageTextSnapshot 是
+// function declaration，被 hoist 到本文件顶层，所以即便它们的源代码行在更下面，
+// 这里直接 pass 也能正常解析。
+const _openaiAuthSignupPhoneCountry = self.MultiPageOpenAIAuthSignupPhoneCountry?.createOpenAIAuthSignupPhoneCountry?.({
+  getSignupPhoneInput: (...args) => getSignupPhoneInput(...args),
+  isVisibleElement,
+  getActionText,
+  getPageTextSnapshot: (...args) => getPageTextSnapshot(...args),
+  sleep,
+  simulateClick,
+  throwIfStopped,
+  getOperationDelayRunner: (...args) => getOperationDelayRunner(...args),
+}) || null;
+const {
+  normalizePhoneDigits,
+  extractDialCodeFromText,
+  dispatchSignupPhoneFieldEvents,
+  normalizeSignupCountryLabel,
+  getSignupCountryLabelAliases,
+  getSignupPhoneOptionLabel,
+  normalizeSignupCountryOptionValue,
+  getSignupRegionDisplayName,
+  getSignupPhoneCountryMatchLabels,
+  isSameSignupCountryOption,
+  getSignupPhoneForm,
+  getSignupPhoneControlRoots,
+  querySignupPhoneCountryElements,
+  isSignupPhoneCountrySelect,
+  getSignupPhoneCountrySelect,
+  getSignupPhoneSelectedCountryOption,
+  getSignupPhoneCountryButtonText,
+  getSignupPhoneCountryButton,
+  getSignupPhoneDisplayedDialCode,
+  getSignupPhoneHiddenNumberInput,
+  resolveSignupPhoneDialCodeFromNumber,
+  resolveSignupPhoneTargetDialCode,
+  getSignupPhoneCountryTargetLabels,
+  doesSignupPhoneCountryTextMatchTarget,
+  isSignupPhoneCountrySelectionSynced,
+  findSignupPhoneCountryOptionByLabel,
+  findSignupPhoneCountryOptionByPhoneNumber,
+  trySelectSignupPhoneCountryOption,
+  getVisibleSignupPhoneCountryListboxOptions,
+  findSignupPhoneCountryListboxOption,
+  trySelectSignupPhoneCountryListboxOption,
+  ensureSignupPhoneCountrySelected,
+} = _openaiAuthSignupPhoneCountry || {};
 
 function toNationalPhoneNumber(value, dialCode) {
   const digits = normalizePhoneDigits(value);
@@ -2840,9 +2013,15 @@ const ADD_EMAIL_PAGE_PATTERN = /add[\s-]*email|添加(?:电子邮件|邮箱)|要
 const STEP5_SUBMIT_ERROR_PATTERN = /无法根据该信息创建帐户|请重试|アカウントを作成できません|アカウント作成に失敗|もう一度お試し|問題が発生しました|無効な(?:生年月日|誕生日|日付)|生年月日|誕生日|unable\s+to\s+create\s+(?:your\s+)?account|couldn'?t\s+create\s+(?:your\s+)?account|something\s+went\s+wrong|invalid\s+(?:birthday|birth|date)|生日|出生日期/i;
 const AUTH_TIMEOUT_ERROR_TITLE_PATTERN = /糟糕，出错了|問題が発生しました|エラーが発生しました|something\s+went\s+wrong|oops/i;
 const AUTH_TIMEOUT_ERROR_DETAIL_PATTERN = /operation\s+timed\s+out|timed\s+out|请求超时|操作超时|タイムアウト|failed\s+to\s+fetch|network\s+error|fetch\s+failed|ネットワークエラー|取得に失敗/i;
-const AUTH_ROUTE_ERROR_PATTERN = /405\s+method\s+not\s+allowed|route\s+error.*405|did\s+not\s+provide\s+an?\s+[`'"]?action|post\s+request\s+to\s+["']?\/email-verification/i;
-const STEP4_405_RECOVERY_ERROR_PREFIX = 'STEP4_405_RECOVERY_LIMIT::';
-const STEP4_405_RECOVERY_LIMIT = 3;
+// AUTH_ROUTE_ERROR_PATTERN / STEP4_405_RECOVERY_* 实际定义在
+// flows/openai/content/openai-auth-route-recovery.js，这里 destructure 出来
+// 让本文件其它常量/工厂调用点无须改动；同模块的 10 个 helper 函数在
+// authPageRecovery 之后通过 createOpenAIAuthRouteRecovery 注入并 destructure。
+const {
+  AUTH_ROUTE_ERROR_PATTERN,
+  STEP4_405_RECOVERY_ERROR_PREFIX,
+  STEP4_405_RECOVERY_LIMIT,
+} = self.MultiPageOpenAIAuthRouteRecovery || {};
 const SIGNUP_USER_ALREADY_EXISTS_ERROR_PREFIX = 'SIGNUP_USER_ALREADY_EXISTS::';
 const SIGNUP_PHONE_PASSWORD_MISMATCH_ERROR_PREFIX = 'SIGNUP_PHONE_PASSWORD_MISMATCH::';
 const SIGNUP_CREATE_ACCOUNT_FAILED_ERROR_PREFIX = 'SIGNUP_CREATE_ACCOUNT_FAILED::';
@@ -2866,6 +2045,53 @@ const authPageRecovery = self.MultiPageAuthPageRecovery?.createAuthPageRecovery?
   throwIfStopped,
   titlePattern: AUTH_TIMEOUT_ERROR_TITLE_PATTERN,
 }) || null;
+
+// 405 路由错误恢复 helper：跟原 monolith 同款 10 个 helper，全部通过工厂注入。
+// recoverCurrentAuthRetryPage 是 function declaration，被 hoist 到本文件顶层，
+// 所以即便它的源代码行在更下面，这里直接 pass 也能正常解析。
+const _openaiAuthRouteRecovery = self.MultiPageOpenAIAuthRouteRecovery?.createOpenAIAuthRouteRecovery?.({
+  log,
+  recoverCurrentAuthRetryPage: (...args) => recoverCurrentAuthRetryPage(...args),
+}) || null;
+const {
+  is405MethodNotAllowedPage,
+  getStep405RecoveryStateKey,
+  getStep405StorageScope,
+  getStep405RecoveryLimit,
+  getStep405RecoveryErrorPrefix,
+  getStep405RecoveryCount,
+  setStep405RecoveryCount,
+  clearStep405RecoveryCount,
+  createStep405RecoveryLimitError,
+  handle405ResendError,
+} = _openaiAuthRouteRecovery || {};
+
+// choose-account 探查 + 决策 helper：跟原 monolith 同款 10 个 helper，全部通过工厂注入。
+// inspectLoginAuthState / normalizeStep6Snapshot / getPageTextSnapshot /
+// getLoginVerificationDisplayedEmail / throwIfStopped / sleep 都是 function declaration，
+// 被 hoist 到本文件顶层，所以即便它们的源代码行在更下面，这里直接 pass 也能正常解析。
+const _openaiAuthChooseAccount = self.MultiPageOpenAIAuthChooseAccount?.createOpenAIAuthChooseAccount?.({
+  isVisibleElement,
+  isActionEnabled,
+  getPageTextSnapshot: (...args) => getPageTextSnapshot(...args),
+  getLoginVerificationDisplayedEmail: (...args) => getLoginVerificationDisplayedEmail(...args),
+  inspectLoginAuthState: (...args) => inspectLoginAuthState(...args),
+  normalizeStep6Snapshot: (...args) => normalizeStep6Snapshot(...args),
+  throwIfStopped,
+  sleep,
+}) || null;
+const {
+  normalizeAuthAccountIdentifier,
+  getChooseAccountCandidateText,
+  isChooseAccountPage,
+  isChooseAccountRemovalAction,
+  resolveChooseAccountClickTarget,
+  resolveChooseAccountCardTarget,
+  findChooseAccountButtonForEmail,
+  findChooseAccountOtherAccountButton,
+  getChooseAccountListedEmails,
+  resolveChooseAccountAction,
+} = _openaiAuthChooseAccount || {};
 
 function getVerificationErrorText() {
   const messages = [];
@@ -3133,266 +2359,14 @@ function getPhoneVerificationDisplayedPhone() {
   return matches[0] ? String(matches[0]).replace(/\s+/g, ' ').trim() : '';
 }
 
-function normalizeAuthAccountIdentifier(value) {
-  return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-function getChooseAccountCandidateText(element) {
-  const parts = [
-    element?.textContent,
-    element?.value,
-    element?.getAttribute?.('aria-label'),
-    element?.getAttribute?.('title'),
-    element?.getAttribute?.('data-testid'),
-    element?.getAttribute?.('data-test-id'),
-  ];
-  return parts
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function isChooseAccountPage() {
-  const path = `${location.pathname || ''} ${location.href || ''}`;
-  if (/\/choose-an-account(?:[/?#]|$)/i.test(path)) {
-    return true;
-  }
-  const pageText = getPageTextSnapshot();
-  if (!CHOOSE_ACCOUNT_PAGE_PATTERN.test(pageText)) {
-    return false;
-  }
-  return Boolean(findChooseAccountButtonForEmail(getLoginVerificationDisplayedEmail()));
-}
-
-function isChooseAccountRemovalAction(element) {
-  if (!element) return false;
-  const text = getChooseAccountCandidateText(element);
-  const role = String(element.getAttribute?.('role') || '').trim().toLowerCase();
-  return CHOOSE_ACCOUNT_REMOVE_ACTION_PATTERN.test(text)
-    || role === 'menuitem'
-    || role === 'switch';
-}
-
-function resolveChooseAccountClickTarget(element) {
-  if (!element || isChooseAccountRemovalAction(element)) {
-    return null;
-  }
-
-  const tag = String(element.tagName || '').trim().toLowerCase();
-  const role = String(element.getAttribute?.('role') || '').trim().toLowerCase();
-  const tabIndex = Number(element.getAttribute?.('tabindex') ?? element.tabIndex ?? NaN);
-  const actionable = tag === 'button'
-    || tag === 'a'
-    || role === 'button'
-    || role === 'link'
-    || (Number.isFinite(tabIndex) && tabIndex >= 0);
-
-  if (actionable && isActionEnabled(element) && isVisibleElement(element)) {
-    return element;
-  }
-
-  const closestAction = element.closest?.(CHOOSE_ACCOUNT_ACTION_SELECTOR) || null;
-  if (
-    closestAction
-    && closestAction !== element
-    && isActionEnabled(closestAction)
-    && isVisibleElement(closestAction)
-    && !isChooseAccountRemovalAction(closestAction)
-  ) {
-    return closestAction;
-  }
-
-  return null;
-}
-
-function resolveChooseAccountCardTarget(element, normalizedEmail = '') {
-  let current = element;
-  let bestTarget = null;
-
-  while (current && current !== document.body) {
-    if (isChooseAccountRemovalAction(current) || !isVisibleElement(current)) {
-      current = current.parentElement;
-      continue;
-    }
-
-    const actionTarget = resolveChooseAccountClickTarget(current);
-    if (actionTarget) {
-      return actionTarget;
-    }
-
-    const text = normalizeAuthAccountIdentifier(getChooseAccountCandidateText(current));
-    if (text.includes(normalizedEmail) && !CHOOSE_ACCOUNT_OTHER_ACCOUNT_PATTERN.test(text)) {
-      bestTarget = current;
-    }
-
-    const closestCard = current.closest?.(CHOOSE_ACCOUNT_CARD_SELECTOR) || null;
-    if (
-      closestCard
-      && closestCard !== current
-      && closestCard !== document.body
-      && isVisibleElement(closestCard)
-      && !isChooseAccountRemovalAction(closestCard)
-    ) {
-      const cardText = normalizeAuthAccountIdentifier(getChooseAccountCandidateText(closestCard));
-      if (cardText.includes(normalizedEmail) && !CHOOSE_ACCOUNT_OTHER_ACCOUNT_PATTERN.test(cardText)) {
-        const cardActionTarget = resolveChooseAccountClickTarget(closestCard);
-        return cardActionTarget || closestCard;
-      }
-    }
-
-    current = current.parentElement;
-  }
-
-  return bestTarget;
-}
-
-function findChooseAccountButtonForEmail(email) {
-  const normalizedEmail = normalizeAuthAccountIdentifier(email);
-  if (!normalizedEmail || !normalizedEmail.includes('@')) {
-    return null;
-  }
-
-  const candidates = Array.from(document.querySelectorAll(CHOOSE_ACCOUNT_ACTION_SELECTOR))
-    .filter((element) => isVisibleElement(element) && isActionEnabled(element));
-
-  for (const candidate of candidates) {
-    if (isChooseAccountRemovalAction(candidate)) continue;
-    const text = normalizeAuthAccountIdentifier(getChooseAccountCandidateText(candidate));
-    if (!text || !text.includes(normalizedEmail)) continue;
-    if (CHOOSE_ACCOUNT_OTHER_ACCOUNT_PATTERN.test(text)) continue;
-    const target = resolveChooseAccountClickTarget(candidate);
-    if (target) {
-      return target;
-    }
-  }
-
-  const emailNodes = Array.from(document.querySelectorAll('body *'))
-    .filter((element) => {
-      if (!isVisibleElement(element)) return false;
-      const text = normalizeAuthAccountIdentifier(getChooseAccountCandidateText(element));
-      return text.includes(normalizedEmail);
-    });
-
-  for (const node of emailNodes) {
-    const target = resolveChooseAccountCardTarget(node, normalizedEmail);
-    if (target) {
-      return target;
-    }
-  }
-
-  return null;
-}
-
-function findChooseAccountOtherAccountButton() {
-  const candidates = Array.from(document.querySelectorAll(CHOOSE_ACCOUNT_ACTION_SELECTOR))
-    .filter((element) => isVisibleElement(element) && isActionEnabled(element));
-
-  return candidates.find((candidate) => {
-    if (isChooseAccountRemovalAction(candidate)) {
-      return false;
-    }
-    const text = getChooseAccountCandidateText(candidate);
-    return CHOOSE_ACCOUNT_OTHER_ACCOUNT_PATTERN.test(text);
-  }) || null;
-}
-
-function getChooseAccountListedEmails() {
-  const emailPattern = /[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/ig;
-  const emails = new Set();
-  const nodes = [
-    ...Array.from(document.querySelectorAll(CHOOSE_ACCOUNT_ACTION_SELECTOR)),
-    ...Array.from(document.querySelectorAll('body *')).filter((element) => isVisibleElement(element)),
-  ];
-
-  for (const node of nodes) {
-    if (isChooseAccountRemovalAction(node)) {
-      continue;
-    }
-    const text = getChooseAccountCandidateText(node);
-    for (const match of text.matchAll(emailPattern)) {
-      emails.add(normalizeAuthAccountIdentifier(match[0]));
-    }
-  }
-
-  return Array.from(emails).filter(Boolean);
-}
-
-async function resolveChooseAccountAction(email, maxRounds = 8, options = {}) {
-  const allowFirstAccountFallback = Boolean(options?.allowFirstAccountFallback);
-  const createAccountPattern = /create\s+(?:an?\s+)?account|sign\s*up|register|\u521b\u5efa(?:\u5e10\u6237|\u8d26\u6237|\u8d26\u53f7)|\u6ce8\u518c|\u30a2\u30ab\u30a6\u30f3\u30c8.*\u4f5c\u6210|\u767b\u9332/i;
-  let otherAccountButton = null;
-  let latestSnapshot = normalizeStep6Snapshot(inspectLoginAuthState());
-
-  for (let round = 0; round < maxRounds; round += 1) {
-    throwIfStopped();
-    latestSnapshot = normalizeStep6Snapshot(inspectLoginAuthState());
-    if (latestSnapshot.state !== 'unknown' && latestSnapshot.state !== 'choose_account_page') {
-      return {
-        snapshot: latestSnapshot,
-      };
-    }
-
-    const target = findChooseAccountButtonForEmail(email);
-    if (target) {
-      return {
-        target,
-        snapshot: latestSnapshot,
-      };
-    }
-
-    if (allowFirstAccountFallback) {
-      const fallbackCandidates = Array.from(new Set([
-        ...Array.from(document.querySelectorAll(CHOOSE_ACCOUNT_ACTION_SELECTOR)),
-        ...Array.from(document.querySelectorAll(CHOOSE_ACCOUNT_CARD_SELECTOR)),
-      ]));
-      for (const candidate of fallbackCandidates) {
-        if (!candidate || !isVisibleElement(candidate) || isChooseAccountRemovalAction(candidate)) {
-          continue;
-        }
-        const candidateText = normalizeAuthAccountIdentifier(getChooseAccountCandidateText(candidate));
-        if (
-          !candidateText
-          || CHOOSE_ACCOUNT_OTHER_ACCOUNT_PATTERN.test(candidateText)
-          || createAccountPattern.test(candidateText)
-        ) {
-          continue;
-        }
-        const clickTarget = resolveChooseAccountClickTarget(candidate) || candidate;
-        if (
-          clickTarget
-          && isVisibleElement(clickTarget)
-          && isActionEnabled(clickTarget)
-          && !isChooseAccountRemovalAction(clickTarget)
-        ) {
-          return {
-            target: clickTarget,
-            snapshot: latestSnapshot,
-            fallback: true,
-          };
-        }
-      }
-    }
-
-    otherAccountButton = findChooseAccountOtherAccountButton() || otherAccountButton;
-    const listedEmails = getChooseAccountListedEmails();
-    if (otherAccountButton && round >= 2 && (listedEmails.length > 0 || round >= 4)) {
-      return {
-        otherAccountButton,
-        snapshot: latestSnapshot,
-      };
-    }
-
-    if (round < maxRounds - 1) {
-      await sleep(round === 0 ? 300 : 500);
-    }
-  }
-
-  return {
-    otherAccountButton,
-    snapshot: latestSnapshot,
-  };
-}
+// choose-account \u63a2\u67e5 + \u51b3\u7b56 helper\uff08normalizeAuthAccountIdentifier /
+// getChooseAccountCandidateText / isChooseAccountPage / isChooseAccountRemovalAction /
+// resolveChooseAccountClickTarget / resolveChooseAccountCardTarget /
+// findChooseAccountButtonForEmail / findChooseAccountOtherAccountButton /
+// getChooseAccountListedEmails / resolveChooseAccountAction\uff09
+// \u5df2\u642c\u5230 flows/openai/content/openai-auth-choose-account.js\uff0c
+// \u5728\u5e38\u91cf\u5757\u9644\u8fd1\u901a\u8fc7 MultiPageOpenAIAuthChooseAccount.createOpenAIAuthChooseAccount({...})
+// \u88c5\u914d\u540e destructure \u66b4\u9732\u7ed9\u672c\u4f5c\u7528\u57df\uff0c\u6240\u4ee5\u8fd9\u91cc\u7684\u6240\u6709 callsite \u65e0\u9700\u4fee\u6539\u3002
 
 function getOAuthConsentForm() {
   return document.querySelector(OAUTH_CONSENT_FORM_SELECTOR);

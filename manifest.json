@@ -60,6 +60,9 @@
         "flows/openai/content/auth-page-recovery.js",
         "flows/openai/content/phone-country-utils.js",
         "flows/openai/content/phone-auth.js",
+        "flows/openai/content/openai-auth-route-recovery.js",
+        "flows/openai/content/openai-auth-choose-account.js",
+        "flows/openai/content/openai-auth-signup-phone-country.js",
         "flows/openai/content/openai-auth.js"
       ],
       "run_at": "document_idle"
