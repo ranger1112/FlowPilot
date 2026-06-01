@@ -2,7 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
-const source = fs.readFileSync('flows/openai/content/openai-auth.js', 'utf8');
+const source = [
+  fs.readFileSync('flows/openai/content/openai-auth.js', 'utf8'),
+  fs.readFileSync('flows/openai/content/openai-auth-step5-profile.js', 'utf8'),
+].join('\n');
 
 function extractFunction(name) {
   const markers = [`async function ${name}(`, `function ${name}(`];
