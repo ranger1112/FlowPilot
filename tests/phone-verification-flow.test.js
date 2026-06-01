@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
 const source = fs.readFileSync('background/phone-verification-flow.js', 'utf8');
+const phoneErrorClassifierSource = fs.readFileSync('background/phone-error-classifier.js', 'utf8');
 const heroSmsSource = fs.readFileSync('phone-sms/providers/hero-sms.js', 'utf8');
 const fiveSimSource = fs.readFileSync('phone-sms/providers/five-sim.js', 'utf8');
 const nexSmsSource = fs.readFileSync('phone-sms/providers/nexsms.js', 'utf8');
@@ -14,6 +15,7 @@ new Function('self', `${fiveSimSource}; return self.PhoneSmsFiveSimProvider;`)(g
 new Function('self', `${nexSmsSource}; return self.PhoneSmsNexSmsProvider;`)(globalScope);
 new Function('self', `${maDaoSource}; return self.PhoneSmsMaDaoProvider;`)(globalScope);
 new Function('self', `${registrySource}; return self.PhoneSmsProviderRegistry;`)(globalScope);
+new Function('self', `${phoneErrorClassifierSource}; return self.MultiPageBackgroundPhoneErrorClassifier;`)(globalScope);
 const api = new Function('self', `${source}; return self.MultiPageBackgroundPhoneVerification;`)(globalScope);
 const maDaoModule = globalScope.PhoneSmsMaDaoProvider;
 
@@ -184,6 +186,7 @@ test('phone verification helper creates 5sim adapter through provider registry w
       },
     },
   };
+  new Function('self', `${phoneErrorClassifierSource}; return self.MultiPageBackgroundPhoneErrorClassifier;`)(root);
   const registryApi = new Function('self', `${source}; return self.MultiPageBackgroundPhoneVerification;`)(root);
   const helpers = registryApi.createPhoneVerificationHelpers({
     addLog: async () => {},
@@ -217,6 +220,7 @@ test('phone verification helper creates MaDao adapter through provider registry 
       },
     },
   };
+  new Function('self', `${phoneErrorClassifierSource}; return self.MultiPageBackgroundPhoneErrorClassifier;`)(root);
   const registryApi = new Function('self', `${source}; return self.MultiPageBackgroundPhoneVerification;`)(root);
   const currentState = {
     phoneSmsProvider: 'madao',

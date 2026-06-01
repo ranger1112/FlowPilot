@@ -622,10 +622,23 @@
 
     function buildRetryableTransportTimeoutError(source, error) {
       const rawMessage = error?.message || String(error || '');
+      const errorCodes = (typeof self !== 'undefined' && self.MultiPageContentScriptErrors)
+        || (typeof globalThis !== 'undefined' && globalThis.MultiPageContentScriptErrors)
+        || null;
       if (isRetryableContentScriptTransportError(error)) {
-        return new Error(
+        const recoverableError = new Error(
           `${getSourceLabel(source)} 页面刚完成跳转或刷新，内容脚本还没有重新接回；扩展已自动重试，但仍未恢复。请重试当前步骤。`
         );
+        if (errorCodes?.tagTransportError && errorCodes?.CONTENT_SCRIPT_ERROR_CODES) {
+          errorCodes.tagTransportError(
+            recoverableError,
+            errorCodes.CONTENT_SCRIPT_ERROR_CODES.TRANSPORT_TIMEOUT_AFTER_RETRY
+          );
+        } else {
+          recoverableError.code = 'transport_timeout_after_retry';
+        }
+        recoverableError.cause = error;
+        return recoverableError;
       }
       return new Error(rawMessage || `${getSourceLabel(source)} 页面通信失败。`);
     }

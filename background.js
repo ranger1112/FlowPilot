@@ -10,6 +10,7 @@ importScripts(
   'flows/index.js',
   'core/flow-kernel/flow-registry.js',
   'shared/contribution-registry.js',
+  'shared/content-script-errors.js',
   'core/flow-kernel/settings-schema.js',
   'imports/legacy/settings-importer.js',
   'core/flow-kernel/source-registry.js',
@@ -24,6 +25,7 @@ importScripts(
   'phone-sms/providers/nexsms.js',
   'phone-sms/providers/madao.js',
   'phone-sms/providers/registry.js',
+  'background/phone-error-classifier.js',
   'background/phone-verification-flow.js',
   'background/account-run-history.js',
   'background/contribution-oauth.js',
@@ -51,6 +53,7 @@ importScripts(
   'flows/openai/background/publisher-webchat.js',
   'background/email-local-part-helpers.js',
   'background/generated-email-helpers.js',
+  'background/content-script-transport.js',
   'background/signup-flow-helpers.js',
   'background/mail-rule-registry.js',
   'flows/openai/mail-rules.js',
@@ -9514,6 +9517,11 @@ function isStopError(error) {
 }
 
 function isRetryableContentScriptTransportError(error) {
+  // 优先用结构化 code 判断（tab-runtime 已经在抛 transport timeout 时挂上了）。
+  // 对于第三方/老调用没有 code 的情况，fallback 走文案正则，保持向后兼容。
+  if (error && typeof error === 'object' && error.code === 'transport_timeout_after_retry') {
+    return true;
+  }
   const message = String(typeof error === 'string' ? error : error?.message || '');
   return /back\/forward cache|message channel is closed|Receiving end does not exist|port closed before a response was received|A listener indicated an asynchronous response|页面刚完成跳转或刷新|内容脚本还没有重新接回|内容脚本\s+\d+(?:\.\d+)?\s*秒内未响应|did not respond in \d+s|failed to fetch|networkerror|network error|fetch failed|load failed/i.test(message);
 }
@@ -13818,6 +13826,13 @@ const signupFlowHelpers = self.MultiPageSignupFlowHelpers?.createSignupFlowHelpe
   isSignupPasswordPageUrl,
   isTabAlive,
   persistRegistrationEmailState,
+  prepareWithRetry: self.MultiPageBackgroundContentScriptTransport?.createContentScriptTransport?.({
+    addLog,
+    ensureContentScriptReadyOnTab,
+    isRetryableContentScriptTransportError,
+    sendToContentScriptResilient,
+    waitForTabStableComplete,
+  })?.prepareWithRetry || null,
   reuseOrCreateTab,
   sendToContentScriptResilient,
   setEmailState,
@@ -13924,6 +13939,7 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
 const phoneVerificationHelpers = self.MultiPageBackgroundPhoneVerification?.createPhoneVerificationHelpers({
   addLog,
   broadcastDataUpdate,
+  phoneErrorClassifier: self.MultiPageBackgroundPhoneErrorClassifier,
   DEFAULT_FIVE_SIM_BASE_URL,
   DEFAULT_FIVE_SIM_COUNTRY_ORDER,
   DEFAULT_FIVE_SIM_OPERATOR,

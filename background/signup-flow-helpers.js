@@ -21,6 +21,7 @@
       isSignupPhoneVerificationPageUrl = null,
       isSignupProfilePageUrl = null,
       persistRegistrationEmailState = null,
+      prepareWithRetry = null,
       reuseOrCreateTab,
       sendToContentScriptResilient,
       setEmailState,
@@ -244,8 +245,15 @@
         throw new Error(`认证页面标签页已关闭，无法完成步骤 ${step} 的提交后确认。`);
       }
 
+      // 同时识别两种可恢复信号：
+      //   1. 透过 isRetryableContentScriptTransportError 走 transport code（首选）
+      //   2. fallback 文案匹配（兼容历史路径以及测试 mock）
       const isStep3FinalizeRecoverableTransportError = (error) => {
         if (isRetryableContentScriptTransportError(error)) {
+          return true;
+        }
+        const errorCode = error && typeof error === 'object' ? String(error.code || '') : '';
+        if (errorCode === 'transport_timeout_after_retry') {
           return true;
         }
         const message = String(error?.message || error || '');
@@ -263,62 +271,95 @@
       };
       const maxPrepareAttempts = 3;
       let result;
-      let lastRecoverableError = null;
 
-      for (let attempt = 1; attempt <= maxPrepareAttempts; attempt += 1) {
-        await ensureContentScriptReadyOnTab('openai-auth', tabId, {
-          inject: OPENAI_AUTH_INJECT_FILES,
-          injectSource: 'openai-auth',
-          timeoutMs: attempt === 1 ? 45000 : 30000,
-          retryDelayMs: 900,
-          logMessage: attempt === 1
-            ? `步骤 ${step}：认证页仍在切换，正在等待页面恢复后继续确认提交流程...`
-            : `步骤 ${step}：认证页刚跳转或刷新，正在等待内容脚本重新接回后继续确认（第 ${attempt}/${maxPrepareAttempts} 次）...`,
-        });
-
-        if (attempt > 1 && typeof waitForTabStableComplete === 'function') {
-          await waitForTabStableComplete(tabId, {
-            timeoutMs: 20000,
-            retryDelayMs: 300,
-            stableMs: 800,
-            initialDelayMs: 300,
-          }).catch(() => null);
-        }
-
+      // 优先走新工具（在 background 下挂载了 prepareWithRetry）；
+      // 测试或老调用没有传时，回退到原内联循环以保持兼容。
+      if (typeof prepareWithRetry === 'function') {
         try {
-          result = await sendToContentScriptResilient('openai-auth', prepareRequest, {
-            timeoutMs: 30000,
-            retryDelayMs: 700,
-            logMessage: `步骤 ${step}：密码已提交，正在确认是否进入下一页面，必要时自动恢复重试页...`,
+          result = await prepareWithRetry({
+            source: 'openai-auth',
+            tabId,
+            request: prepareRequest,
+            injectFiles: OPENAI_AUTH_INJECT_FILES,
+            injectSource: 'openai-auth',
+            maxAttempts: maxPrepareAttempts,
+            ensureReadyTimeoutMs: 45000,
+            ensureReadyRetryTimeoutMs: 30000,
+            ensureReadyRetryDelayMs: 900,
+            ensureReadyFirstLogMessage: `步骤 ${step}：认证页仍在切换，正在等待页面恢复后继续确认提交流程...`,
+            ensureReadyRetryLogMessage: ({ attempt, maxAttempts }) =>
+              `步骤 ${step}：认证页刚跳转或刷新，正在等待内容脚本重新接回后继续确认（第 ${attempt}/${maxAttempts} 次）...`,
+            sendTimeoutMs: 30000,
+            sendRetryDelayMs: 700,
+            sendLogMessage: `步骤 ${step}：密码已提交，正在确认是否进入下一页面，必要时自动恢复重试页...`,
+            isRecoverableError: isStep3FinalizeRecoverableTransportError,
+            retryAttemptLogMessage: ({ attempt, maxAttempts, error }) =>
+              `步骤 ${step}：认证页提交后发生短暂通信中断，准备重新接回并继续确认页面状态（第 ${attempt}/${maxAttempts} 次）。原因：${error?.message || error}`,
+            finalErrorMessage: ({ maxAttempts }) =>
+              `步骤 ${step}：认证页在提交后切换过程中页面通信超时，已重新接回确认 ${maxAttempts} 次仍未成功。请重试当前轮。`,
           });
-          lastRecoverableError = null;
-          break;
         } catch (error) {
-          if (!isStep3FinalizeRecoverableTransportError(error)) {
-            throw error;
-          }
-
-          lastRecoverableError = error;
-          if (attempt < maxPrepareAttempts) {
-            if (typeof addLog === 'function') {
-              await addLog(
-                `步骤 ${step}：认证页提交后发生短暂通信中断，准备重新接回并继续确认页面状态（第 ${attempt}/${maxPrepareAttempts} 次）。原因：${error?.message || error}`,
-                'warn'
-              );
-            }
-            continue;
-          }
-
-          const message = `步骤 ${step}：认证页在提交后切换过程中页面通信超时，已重新接回确认 ${maxPrepareAttempts} 次仍未成功。请重试当前轮。`;
-          if (typeof addLog === 'function') {
-            await addLog(message, 'warn');
-          }
-          throw new Error(message);
+          // prepareWithRetry 抛出的最终错误已经记过日志，这里直接透传。
+          throw error;
         }
-      }
+      } else {
+        // ---- 兜底：老内联循环路径 ----
+        let lastRecoverableError = null;
+        for (let attempt = 1; attempt <= maxPrepareAttempts; attempt += 1) {
+          await ensureContentScriptReadyOnTab('openai-auth', tabId, {
+            inject: OPENAI_AUTH_INJECT_FILES,
+            injectSource: 'openai-auth',
+            timeoutMs: attempt === 1 ? 45000 : 30000,
+            retryDelayMs: 900,
+            logMessage: attempt === 1
+              ? `步骤 ${step}：认证页仍在切换，正在等待页面恢复后继续确认提交流程...`
+              : `步骤 ${step}：认证页刚跳转或刷新，正在等待内容脚本重新接回后继续确认（第 ${attempt}/${maxPrepareAttempts} 次）...`,
+          });
 
-      if (!result && lastRecoverableError) {
-        throw lastRecoverableError;
+          if (attempt > 1 && typeof waitForTabStableComplete === 'function') {
+            await waitForTabStableComplete(tabId, {
+              timeoutMs: 20000,
+              retryDelayMs: 300,
+              stableMs: 800,
+              initialDelayMs: 300,
+            }).catch(() => null);
+          }
+
+          try {
+            result = await sendToContentScriptResilient('openai-auth', prepareRequest, {
+              timeoutMs: 30000,
+              retryDelayMs: 700,
+              logMessage: `步骤 ${step}：密码已提交，正在确认是否进入下一页面，必要时自动恢复重试页...`,
+            });
+            lastRecoverableError = null;
+            break;
+          } catch (error) {
+            if (!isStep3FinalizeRecoverableTransportError(error)) {
+              throw error;
+            }
+
+            lastRecoverableError = error;
+            if (attempt < maxPrepareAttempts) {
+              if (typeof addLog === 'function') {
+                await addLog(
+                  `步骤 ${step}：认证页提交后发生短暂通信中断，准备重新接回并继续确认页面状态（第 ${attempt}/${maxPrepareAttempts} 次）。原因：${error?.message || error}`,
+                  'warn'
+                );
+              }
+              continue;
+            }
+
+            const message = `步骤 ${step}：认证页在提交后切换过程中页面通信超时，已重新接回确认 ${maxPrepareAttempts} 次仍未成功。请重试当前轮。`;
+            if (typeof addLog === 'function') {
+              await addLog(message, 'warn');
+            }
+            throw new Error(message);
+          }
+        }
+
+        if (!result && lastRecoverableError) {
+          throw lastRecoverableError;
+        }
       }
 
       if (result?.error) {
